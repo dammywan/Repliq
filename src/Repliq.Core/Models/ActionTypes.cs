@@ -32,5 +32,16 @@ public static class ActionTypes
         return !string.IsNullOrWhiteSpace(type) && ValidSet.Contains(type);
     }
 
+    public static string? Normalize(string? type)
+    {
+        if (string.IsNullOrWhiteSpace(type)) return type;
+        foreach (var action in ValidSet)
+        {
+            if (string.Equals(action, type, StringComparison.OrdinalIgnoreCase))
+                return action;
+        }
+        return type;
+    }
+
     public static IReadOnlyCollection<string> All => ValidSet;
 }

@@ -183,7 +183,7 @@ Do not emit code or scripts. Emit ONLY valid JSON conforming to the Repliq workf
 
     private async Task<string> CallGeminiAsync(string prompt, CancellationToken ct)
     {
-        var endpoint = $"https://generativelanguage.googleapis.com/v1beta/models/{Model}:generateContent?key={_apiKey}";
+        var endpoint = $"https://generativelanguage.googleapis.com/v1beta/models/{Model}:generateContent";
 
         var payload = new
         {
@@ -201,8 +201,14 @@ Do not emit code or scripts. Emit ONLY valid JSON conforming to the Repliq workf
             }
         };
 
-        var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-        var response = await _httpClient.PostAsync(endpoint, content, ct);
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+        if (!string.IsNullOrWhiteSpace(_apiKey))
+        {
+            request.Headers.TryAddWithoutValidation("x-goog-api-key", _apiKey);
+        }
+        request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+
+        var response = await _httpClient.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
 
         var body = await response.Content.ReadAsStringAsync(ct);

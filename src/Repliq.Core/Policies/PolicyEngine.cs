@@ -5,22 +5,27 @@ namespace Repliq.Core.Policies;
 public interface IPolicyEngine
 {
     PolicyDecision EvaluateAction(WorkflowAction action, WorkflowDefinition workflow);
-    PolicyDecision EvaluateTarget(TargetSelector? target, TargetPolicy? workflowPolicy);
-    bool IsProcessAllowed(string processName, TargetPolicy? workflowPolicy);
+    PolicyDecision EvaluateTarget(TargetSelector? target, TargetPolicy? workflowPolicy, bool isUntrusted = false);
+    bool IsProcessAllowed(string processName, TargetPolicy? workflowPolicy, bool isUntrusted = false);
 }
 
 public sealed class SecurityPolicyConfig
 {
     public List<string> GlobalAllowedProcesses { get; set; } = new()
     {
-        "notepad.exe", "calc.exe", "excel.exe", "chrome.exe", "msedge.exe", "brave.exe"
+        "notepad.exe", "calc.exe", "excel.exe", "chrome.exe", "msedge.exe", "brave.exe",
+        "windowsterminal.exe", "wt.exe", "explorer.exe", "taskmgr.exe",
+        "antigravity.exe", "code.exe", "devenv.exe"
     };
+
+    public HashSet<string> ApprovedProcesses { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public HashSet<string> BlockedProcesses { get; set; } = new(StringComparer.OrdinalIgnoreCase)
     {
         "cmd.exe", "powershell.exe", "pwsh.exe", "bash.exe", "wscript.exe", "cscript.exe",
         "mshta.exe", "rundll32.exe", "regsvr32.exe", "certutil.exe", "bitsadmin.exe",
-        "reg.exe", "schtasks.exe", "sc.exe", "net.exe", "repliq.app.exe", "repliq.exe"
+        "reg.exe", "schtasks.exe", "sc.exe", "net.exe", "repliq.app.exe", "repliq.exe",
+        "repliq.quick.exe", "repliq.quick"
     };
 
     public List<string> BlockedWindowPatterns { get; set; } = new()
@@ -74,7 +79,10 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         // Evaluate target
         if (action.Target is not null)
         {
-            var targetDecision = EvaluateTarget(action.Target, workflow.TargetPolicy);
+            bool isUntrusted = workflow.Metadata.TryGetValue("Imported", out var imp) &&
+                               string.Equals(imp, "true", StringComparison.OrdinalIgnoreCase);
+
+            var targetDecision = EvaluateTarget(action.Target, workflow.TargetPolicy, isUntrusted);
             if (!targetDecision.IsAllowed)
                 return targetDecision;
         }
@@ -82,7 +90,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         return PolicyDecision.Allow("Action approved by policy engine.", requiresConfirmation);
     }
 
-    public PolicyDecision EvaluateTarget(TargetSelector? target, TargetPolicy? workflowPolicy)
+    public PolicyDecision EvaluateTarget(TargetSelector? target, TargetPolicy? workflowPolicy, bool isUntrusted = false)
     {
         if (target is null)
             return PolicyDecision.Allow("Action has no target.", false);
@@ -91,8 +99,14 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         if (!string.IsNullOrWhiteSpace(target.ProcessName))
         {
             var proc = target.ProcessName.Trim();
+            var fileName = Path.GetFileName(proc);
+            var nameWithoutExt = Path.GetFileNameWithoutExtension(proc);
+            var nameWithExt = nameWithoutExt + ".exe";
+
             if (_config.BlockedProcesses.Contains(proc) ||
-                _config.BlockedProcesses.Contains(Path.GetFileName(proc)))
+                _config.BlockedProcesses.Contains(fileName) ||
+                _config.BlockedProcesses.Contains(nameWithExt) ||
+                _config.BlockedProcesses.Contains(nameWithoutExt))
             {
                 return PolicyDecision.Deny(
                     $"Process '{proc}' is on the blocked security denylist and cannot be automated.",
@@ -101,19 +115,27 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
 
             if (_config.RequireExplicitProcessAllowlist)
             {
-                bool isAllowedGlobally = _config.GlobalAllowedProcesses.Any(p =>
+                bool isAllowedGlobally = _config.GlobalAllowedProcesses.Concat(_config.ApprovedProcesses).Any(p =>
                     string.Equals(p, proc, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(p, Path.GetFileName(proc), StringComparison.OrdinalIgnoreCase));
+                    string.Equals(p, fileName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p, nameWithExt, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p, nameWithoutExt, StringComparison.OrdinalIgnoreCase));
 
-                bool isAllowedInWorkflow = workflowPolicy?.AllowedProcesses.Any(p =>
+                // Imported/untrusted workflows cannot self-authorize processes via their own targetPolicy
+                bool isAllowedInWorkflow = !isUntrusted && (workflowPolicy?.AllowedProcesses.Any(p =>
                     string.Equals(p, proc, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(p, Path.GetFileName(proc), StringComparison.OrdinalIgnoreCase)) ?? false;
+                    string.Equals(p, fileName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p, nameWithExt, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p, nameWithoutExt, StringComparison.OrdinalIgnoreCase)) ?? false);
 
                 if (!isAllowedGlobally && !isAllowedInWorkflow)
                 {
-                    return PolicyDecision.Deny(
-                        $"Process '{proc}' is not in the allowed processes policy list.",
-                        "DENIED_PROCESS_NOT_ALLOWLISTED");
+                    var reason = isUntrusted
+                        ? $"Process '{proc}' is not authorized by application policy. Untrusted imported workflows cannot self-authorize target processes."
+                        : $"Process '{proc}' is not in the allowed processes policy list.";
+
+                    var code = isUntrusted ? "DENIED_UNTRUSTED_IMPORTED_PROCESS" : "DENIED_PROCESS_NOT_ALLOWLISTED";
+                    return PolicyDecision.Deny(reason, code);
                 }
             }
         }
@@ -135,9 +157,9 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         return PolicyDecision.Allow("Target permitted.", false);
     }
 
-    public bool IsProcessAllowed(string processName, TargetPolicy? workflowPolicy)
+    public bool IsProcessAllowed(string processName, TargetPolicy? workflowPolicy, bool isUntrusted = false)
     {
         var dummyTarget = new TargetSelector { ProcessName = processName };
-        return EvaluateTarget(dummyTarget, workflowPolicy).IsAllowed;
+        return EvaluateTarget(dummyTarget, workflowPolicy, isUntrusted).IsAllowed;
     }
 }

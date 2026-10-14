@@ -15,9 +15,10 @@ public sealed class DryRunPermissionsView : UserControl
     private readonly TextBox _txtPolicySummary = new();
     private readonly ListView _listPlannedSteps = new();
     private readonly TextBox _txtDryRunReport = new();
-    private readonly Button _btnStartDryRun = new();
-    private readonly Button _btnExecuteRun = new();
-    private readonly Button _btnBackToEdit = new();
+    private readonly ThemedButton _btnStartDryRun = new();
+    private readonly ThemedButton _btnExecuteRun = new();
+    private readonly ThemedButton _btnBackToEdit = new();
+    private SplitContainer? _split;
 
     public DryRunPermissionsView(IPolicyEngine policyEngine, Action<string, WorkflowDefinition> navigateWorkflowAction)
     {
@@ -96,7 +97,9 @@ public sealed class DryRunPermissionsView : UserControl
     private void InitializeComponents()
     {
         Dock = DockStyle.Fill;
-        Padding = new Padding(24);
+        Padding = new Padding(24, 18, 24, 18);
+        AutoScroll = true;
+        AutoScaleMode = AutoScaleMode.Dpi;
 
         var layout = new TableLayoutPanel
         {
@@ -120,12 +123,15 @@ public sealed class DryRunPermissionsView : UserControl
         layout.Controls.Add(pnlHeader, 0, 0);
 
         // Middle Split (Policy vs Steps)
-        var split = new SplitContainer
+        _split = new SplitContainer
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Vertical,
             SplitterDistance = 450
         };
+        var split = _split;
+
+        Resize += (_, _) => AdjustLayout();
 
         var grpPolicy = new GroupBox { Text = "Permission Scope & Safety Policy", Dock = DockStyle.Fill, Font = UITheme.FontSubheader };
         _txtPolicySummary.Dock = DockStyle.Fill;
@@ -185,6 +191,24 @@ public sealed class DryRunPermissionsView : UserControl
         layout.Controls.Add(pnlBtns, 0, 3);
 
         Controls.Add(layout);
+        AdjustLayout();
+    }
+
+    private void AdjustLayout()
+    {
+        if (_split is not null && _split.Width > 200)
+        {
+            int target = (int)(_split.Width * 0.44);
+            if (target > 120 && target < _split.Width - 120)
+            {
+                _split.SplitterDistance = target;
+            }
+        }
+        if (_listPlannedSteps.Columns.Count >= 5)
+        {
+            int available = _listPlannedSteps.ClientSize.Width - (35 + 90 + 120 + 75);
+            _listPlannedSteps.Columns[2].Width = Math.Max(120, available);
+        }
     }
 
     private void PerformDryRun()

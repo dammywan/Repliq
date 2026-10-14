@@ -2,8 +2,11 @@
 
 **Document type:** Product requirements, architecture, security specification, and engineering guide  
 **Product:** Repliq  
+**Developer / Vendor:** RetsardCo (2026)  
+**Version:** 0.1.0-alpha  
+**License:** MIT License (Copyright © 2026 RetsardCo)  
 **Target platform:** Windows 10/11 x64, with Windows 11 as the primary test target  
-**Status:** Initial specification — validate assumptions during Phase 1  
+**Status:** Alpha Release (v0.1.0-alpha)  
 **Primary objective:** Secure, reliable, and resource-conscious desktop workflow automation
 
 ---

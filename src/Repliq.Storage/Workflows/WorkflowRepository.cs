@@ -54,6 +54,7 @@ public sealed class WorkflowRepository : IWorkflowRepository
                 var wf = JsonSerializer.Deserialize<WorkflowDefinition>(json, _jsonOptions);
                 if (wf is not null && WorkflowValidator.Validate(wf).IsValid)
                 {
+                    EnsureLocalWorkflowPolicy(wf);
                     list.Add(wf);
                 }
             }
@@ -68,7 +69,7 @@ public sealed class WorkflowRepository : IWorkflowRepository
 
     public async Task<WorkflowDefinition?> GetByIdAsync(string id)
     {
-        if (string.IsNullOrWhiteSpace(id) || WorkflowValidator.HasPathTraversal(id))
+        if (string.IsNullOrWhiteSpace(id) || !WorkflowValidator.IsValidIdentifier(id))
             return null;
 
         var path = Path.Combine(_storageDir, $"{id}.json");
@@ -84,7 +85,30 @@ public sealed class WorkflowRepository : IWorkflowRepository
         if (wf is null || !WorkflowValidator.Validate(wf).IsValid)
             return null;
 
+        EnsureLocalWorkflowPolicy(wf);
         return wf;
+    }
+
+    private static void EnsureLocalWorkflowPolicy(WorkflowDefinition wf)
+    {
+        bool isUntrusted = wf.Metadata.TryGetValue("Imported", out var imp) &&
+                           string.Equals(imp, "true", StringComparison.OrdinalIgnoreCase);
+        if (!isUntrusted)
+        {
+            wf.TargetPolicy ??= new TargetPolicy();
+            var existingProcs = new HashSet<string>(wf.TargetPolicy.AllowedProcesses, StringComparer.OrdinalIgnoreCase);
+            foreach (var a in wf.Actions)
+            {
+                if (!string.IsNullOrWhiteSpace(a.Target?.ProcessName))
+                {
+                    var fn = Path.GetFileName(a.Target.ProcessName);
+                    if (existingProcs.Add(fn))
+                    {
+                        wf.TargetPolicy.AllowedProcesses.Add(fn);
+                    }
+                }
+            }
+        }
     }
 
     public async Task SaveAsync(WorkflowDefinition workflow)
@@ -110,7 +134,7 @@ public sealed class WorkflowRepository : IWorkflowRepository
 
     public Task DeleteAsync(string id)
     {
-        if (string.IsNullOrWhiteSpace(id) || WorkflowValidator.HasPathTraversal(id))
+        if (string.IsNullOrWhiteSpace(id) || !WorkflowValidator.IsValidIdentifier(id))
             return Task.CompletedTask;
 
         var path = Path.Combine(_storageDir, $"{id}.json");

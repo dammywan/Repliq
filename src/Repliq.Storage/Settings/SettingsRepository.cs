@@ -4,7 +4,7 @@ namespace Repliq.Storage.Settings;
 
 public sealed class AppSettings
 {
-    public string Theme { get; set; } = "System"; // "Light", "Dark", "System"
+    public string Theme { get; set; } = "Dark"; // "Light", "Dark", "System"
     public string EmergencyStopShortcut { get; set; } = "Ctrl+Shift+S";
     public string RecordShortcut { get; set; } = "Ctrl+Shift+R";
     public string PlayShortcut { get; set; } = "Ctrl+Shift+P";

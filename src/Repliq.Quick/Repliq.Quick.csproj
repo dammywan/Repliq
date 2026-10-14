@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Repliq.Quick</AssemblyName>
+    <ApplicationManifest>..\Repliq.App\app.manifest</ApplicationManifest>
+    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\app.ico" />
+    <EmbeddedResource Include="Resources\logo.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Repliq.Core\Repliq.Core.csproj" />
+    <ProjectReference Include="..\Repliq.Windows\Repliq.Windows.csproj" />
+    <ProjectReference Include="..\Repliq.Storage\Repliq.Storage.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Repliq.App\UITheme.cs" Link="UITheme.cs" />
+    <Compile Include="..\Repliq.App\QuickPanelForm.cs" Link="QuickPanelForm.cs" />
+  </ItemGroup>
+
+</Project>

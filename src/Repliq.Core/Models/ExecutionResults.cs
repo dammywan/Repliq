@@ -44,6 +44,7 @@ public sealed class WorkflowRunRecord
     public int TotalActions { get; set; }
     public int ExecutedActions { get; set; }
     public string? LastCheckpointId { get; set; }
+    public string? LastSuccessfulActionId { get; set; }
     public string? FailedActionId { get; set; }
     public string? SafeErrorMessage { get; set; }
     public string? ErrorCode { get; set; }

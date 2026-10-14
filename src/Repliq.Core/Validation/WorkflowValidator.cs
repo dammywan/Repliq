@@ -42,7 +42,7 @@ public static class WorkflowValidator
     private static readonly HashSet<string> KnownWorkflowProperties = new(StringComparer.OrdinalIgnoreCase)
     {
         "schemaversion", "id", "name", "description", "createdutc", "modifiedutc",
-        "targetpolicy", "limits", "actions", "metadata"
+        "targetpolicy", "limits", "actions", "metadata", "variables"
     };
 
     /// <summary>
@@ -97,14 +97,49 @@ public static class WorkflowValidator
         {
             result.AddError("Missing required property 'schemaVersion'.");
         }
-        else if (svNode.GetValue<int>() != 1)
+        else
         {
-            result.AddError($"Unsupported schema version '{svNode}'. Only version 1 is supported.");
+            bool isInt = false;
+            int svVal = 0;
+            try
+            {
+                if (svNode is JsonValue jv && jv.TryGetValue<int>(out var parsed))
+                {
+                    isInt = true;
+                    svVal = parsed;
+                }
+                else if (int.TryParse(svNode.ToString(), out var strParsed))
+                {
+                    isInt = true;
+                    svVal = strParsed;
+                }
+            }
+            catch
+            {
+                isInt = false;
+            }
+
+            if (!isInt)
+            {
+                result.AddError($"Property 'schemaVersion' must be an integer. Received: '{svNode}'.");
+            }
+            else if (svVal != 1)
+            {
+                result.AddError($"Unsupported schema version '{svVal}'. Only version 1 is supported.");
+            }
         }
 
         // Check actions array structure
-        var actionsNode = rootObj.FirstOrDefault(kvp => string.Equals(kvp.Key, "actions", StringComparison.OrdinalIgnoreCase)).Value;
-        if (actionsNode is JsonArray actionsArray)
+        var actionsKvp = rootObj.FirstOrDefault(kvp => string.Equals(kvp.Key, "actions", StringComparison.OrdinalIgnoreCase));
+        if (actionsKvp.Value is null)
+        {
+            result.AddError("Missing required property 'actions'.");
+        }
+        else if (actionsKvp.Value is not JsonArray actionsArray)
+        {
+            result.AddError("Property 'actions' must be a JSON array.");
+        }
+        else
         {
             if (actionsArray.Count > MaxAllowedActions)
             {
@@ -154,6 +189,10 @@ public static class WorkflowValidator
         if (string.IsNullOrWhiteSpace(workflow.Id))
         {
             result.AddError("Workflow ID is required.");
+        }
+        else if (!IsValidIdentifier(workflow.Id))
+        {
+            result.AddError($"Workflow ID '{workflow.Id}' contains invalid characters or path traversal. IDs must contain only alphanumeric characters, hyphens, and underscores.");
         }
         else if (workflow.Id.Length > MaxStringLength)
         {
@@ -267,6 +306,10 @@ public static class WorkflowValidator
         {
             result.AddError($"Action at index {index} has an empty ID.");
         }
+        else if (!IsValidIdentifier(action.Id))
+        {
+            result.AddError($"Action at index {index} has invalid ID '{action.Id}'. Action IDs must contain only alphanumeric characters, hyphens, and underscores.");
+        }
         else if (!seenIds.Add(action.Id))
         {
             result.AddError($"Duplicate action ID '{action.Id}' found at index {index}.");
@@ -288,7 +331,7 @@ public static class WorkflowValidator
         }
 
         // Action-specific validations
-        switch (action.Type?.ToLowerInvariant())
+        switch (ActionTypes.Normalize(action.Type))
         {
             case ActionTypes.TypeText:
                 ValidateTypeTextAction(action, index, result);
@@ -366,7 +409,7 @@ public static class WorkflowValidator
 
     private static void ValidateKeyPressAction(WorkflowAction action, int index, WorkflowValidationResult result)
     {
-        if (!action.Parameters.ContainsKey("key"))
+        if (!action.Parameters.TryGetValue("key", out var k) || k is null || string.IsNullOrWhiteSpace(k.ToString()))
         {
             result.AddError($"Action[{index}] KeyPress must specify 'key' parameter.");
         }
@@ -403,6 +446,17 @@ public static class WorkflowValidator
         if (path.Contains("..")) return true;
         if (path.IndexOfAny(Path.GetInvalidPathChars()) >= 0) return true;
         return false;
+    }
+
+    private static readonly Regex SafeIdentifierPattern = new(@"^[a-zA-Z0-9_\-]+$", RegexOptions.Compiled);
+
+    public static bool IsValidIdentifier(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id) || id.Length > MaxStringLength) return false;
+        if (id.Contains("..") || id.Contains('/') || id.Contains('\\') || id.Contains(':')) return false;
+        if (Path.IsPathRooted(id)) return false;
+        if (id.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return false;
+        return SafeIdentifierPattern.IsMatch(id);
     }
 
     public static bool IsValidDomain(string domain)

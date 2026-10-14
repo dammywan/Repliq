@@ -1,3 +1,5 @@
+using System.Drawing;
+using System.Drawing.Drawing2D;
 using Repliq.Core.Models;
 using Repliq.Core.Playback;
 using Repliq.Storage.History;
@@ -9,24 +11,34 @@ public sealed class RunMonitorView : UserControl
     private readonly IExecutionController _controller;
     private readonly IHistoryRepository _historyRepo;
 
-    private readonly Label _lblWorkflowHeader = new();
-    private readonly Label _lblStateStatus = new();
-    private readonly Label _lblCurrentTarget = new();
-    private readonly ProgressBar _progressBar = new();
-    private readonly Label _lblProgressRatio = new();
+    // Header Controls
+    private readonly Label _lblWorkflowTitle = new();
+    private readonly Label _lblWorkflowSubtitle = new();
+    private readonly Label _lblStatusPill = new();
 
-    private readonly ListView _listStepProgress = new();
-    private readonly TextBox _txtLogMessages = new();
+    // Progress Controls
+    private readonly Label _lblStepsRatio = new();
+    private readonly CustomProgressBar _progressBar = new();
 
-    private readonly Button _btnPauseResume = new();
+    // Steps Timeline Container
+    private readonly Panel _pnlStepsContainer = new();
+    private readonly List<StepCardItem> _stepCards = new();
+
+    // Bottom Action Controls
+    private readonly Button _btnPause = new();
     private readonly Button _btnStop = new();
     private readonly Button _btnEmergencyStop = new();
 
+    // Logs & Recovery Panel
+    private readonly Panel _pnlLogsHost = new();
+    private readonly TextBox _txtLogMessages = new();
     private readonly Panel _pnlRecovery = new();
     private readonly Label _lblRecoveryMessage = new();
+    private readonly Button _btnToggleLogs = new();
 
     private WorkflowDefinition? _activeWorkflow;
     private bool _isLiveExecution = true;
+    private bool _logsExpanded = false;
 
     public RunMonitorView(IExecutionController controller, IHistoryRepository historyRepo)
     {
@@ -41,173 +53,299 @@ public sealed class RunMonitorView : UserControl
         _controller.ConfirmationRequested += OnConfirmationRequested;
     }
 
-    public async Task StartExecutionAsync(WorkflowDefinition workflow, bool isLive = true)
-    {
-        _activeWorkflow = workflow;
-        _isLiveExecution = isLive;
-
-        _lblWorkflowHeader.Text = $"Workflow: {workflow.Name} {(isLive ? "(Live Execution)" : "(Dry Run)")}";
-        _lblCurrentTarget.Text = "Target: Preparing...";
-        _progressBar.Minimum = 0;
-        _progressBar.Maximum = Math.Max(1, workflow.Actions.Count);
-        _progressBar.Value = 0;
-        _lblProgressRatio.Text = $"0 / {workflow.Actions.Count}";
-        _pnlRecovery.Visible = false;
-
-        PopulateStepsList(workflow);
-
-        _txtLogMessages.Clear();
-        _txtLogMessages.AppendText($"[INFO] Starting playback for workflow '{workflow.Name}'...\r\n");
-
-        _btnPauseResume.Enabled = true;
-        _btnPauseResume.Text = "⏸ Pause";
-        _btnStop.Enabled = true;
-        _btnEmergencyStop.Enabled = true;
-
-        var record = await _controller.StartAsync(workflow, dryRun: !isLive);
-
-        // Record run to history
-        await _historyRepo.RecordRunAsync(record);
-
-        if (record.FinalState == ExecutionState.Failed)
-        {
-            ShowRecoveryPanel(record);
-        }
-    }
-
     private void InitializeComponents()
     {
         Dock = DockStyle.Fill;
-        Padding = new Padding(24);
+        AutoScroll = true;
+        AutoScaleMode = AutoScaleMode.Dpi;
+        Padding = new Padding(28, 20, 28, 20);
 
-        var layout = new TableLayoutPanel
+        // Top container (Header & Progress Card)
+        var pnlTop = new Panel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            Margin = new Padding(0)
+        };
+
+        // 0. Header (Title, Subtitle, Status Pill)
+        var pnlHeader = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            ColumnCount = 2,
+            RowCount = 1,
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 14)
+        };
+        pnlHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        pnlHeader.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        var pnlTitles = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 5
+            FlowDirection = FlowDirection.TopDown,
+            AutoSize = true,
+            Margin = new Padding(0)
         };
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Header & State Banner
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Progress bar
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 60)); // Step progress list
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 40)); // Log messages
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Control buttons & Emergency Stop
 
-        // 1. Header Banner
-        var pnlBanner = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoSize = true, Margin = new Padding(0, 0, 0, 12) };
-        pnlBanner.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70));
-        pnlBanner.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
+        _lblWorkflowTitle.Text = "Workflow Execution";
+        _lblWorkflowTitle.Font = UITheme.FontDisplay;
+        _lblWorkflowTitle.ForeColor = UITheme.Current.PrimaryText;
+        _lblWorkflowTitle.AutoSize = true;
 
-        var pnlLeftBanner = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, AutoSize = true };
-        _lblWorkflowHeader.Text = "Workflow: Not Started";
-        _lblWorkflowHeader.Font = UITheme.FontHeader;
-        _lblWorkflowHeader.AutoSize = true;
+        _lblWorkflowSubtitle.Text = "Ready to start automation";
+        _lblWorkflowSubtitle.Font = UITheme.FontBody;
+        _lblWorkflowSubtitle.ForeColor = UITheme.Current.SecondaryText;
+        _lblWorkflowSubtitle.AutoSize = true;
+        _lblWorkflowSubtitle.Margin = new Padding(0, 2, 0, 0);
 
-        _lblCurrentTarget.Text = "Target: Idle";
-        _lblCurrentTarget.Font = UITheme.FontBody;
-        _lblCurrentTarget.Tag = "secondary";
-        _lblCurrentTarget.AutoSize = true;
-        pnlLeftBanner.Controls.AddRange(new Control[] { _lblWorkflowHeader, _lblCurrentTarget });
-        pnlBanner.Controls.Add(pnlLeftBanner, 0, 0);
+        pnlTitles.Controls.AddRange(new Control[] { _lblWorkflowTitle, _lblWorkflowSubtitle });
+        pnlHeader.Controls.Add(pnlTitles, 0, 0);
 
-        _lblStateStatus.Text = "[● IDLE]";
-        _lblStateStatus.Font = UITheme.FontHeader;
-        _lblStateStatus.TextAlign = ContentAlignment.MiddleRight;
-        _lblStateStatus.Dock = DockStyle.Fill;
-        pnlBanner.Controls.Add(_lblStateStatus, 1, 0);
+        _lblStatusPill.Text = "  Ready  ";
+        _lblStatusPill.Font = UITheme.FontBodyBold;
+        _lblStatusPill.BackColor = UITheme.Current.SecondarySurface;
+        _lblStatusPill.ForeColor = UITheme.Current.SecondaryText;
+        _lblStatusPill.AutoSize = true;
+        _lblStatusPill.Padding = new Padding(12, 6, 12, 6);
+        _lblStatusPill.Margin = new Padding(0, 6, 0, 0);
+        pnlHeader.Controls.Add(_lblStatusPill, 1, 0);
+        pnlTop.Controls.Add(pnlHeader);
 
-        layout.Controls.Add(pnlBanner, 0, 0);
+        // 1. Progress Card (Verified Steps)
+        var pnlProgressCard = new Panel
+        {
+            Dock = DockStyle.Top,
+            BackColor = UITheme.Current.CardSurface,
+            Padding = new Padding(16, 12, 16, 12),
+            Margin = new Padding(0, 0, 0, 12),
+            Height = 72
+        };
 
-        // 2. Progress Bar
-        var pnlProgress = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0, 0, 0, 12) };
-        _progressBar.Width = 600;
-        _progressBar.Height = 22;
-        _lblProgressRatio.Font = UITheme.FontBodyBold;
-        _lblProgressRatio.AutoSize = true;
-        _lblProgressRatio.Margin = new Padding(12, 2, 0, 0);
-        pnlProgress.Controls.AddRange(new Control[] { _progressBar, _lblProgressRatio });
-        layout.Controls.Add(pnlProgress, 0, 1);
+        var pnlProgressHeader = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            ColumnCount = 2,
+            RowCount = 1,
+            Height = 24
+        };
+        pnlProgressHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        pnlProgressHeader.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-        // 3. Step Progress List
-        _listStepProgress.Dock = DockStyle.Fill;
-        _listStepProgress.View = View.Details;
-        _listStepProgress.FullRowSelect = true;
-        _listStepProgress.Font = UITheme.FontBody;
-        _listStepProgress.Columns.Add("Step", 50);
-        _listStepProgress.Columns.Add("Type", 100);
-        _listStepProgress.Columns.Add("Description", 300);
-        _listStepProgress.Columns.Add("Target", 150);
-        _listStepProgress.Columns.Add("Status", 150);
-        layout.Controls.Add(_listStepProgress, 0, 2);
+        var lblProgressTitle = new Label
+        {
+            Text = "Verified steps",
+            Font = UITheme.FontBody,
+            ForeColor = UITheme.Current.SecondaryText,
+            AutoSize = true,
+            Dock = DockStyle.Left,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        pnlProgressHeader.Controls.Add(lblProgressTitle, 0, 0);
 
-        // 4. Log Box & Recovery Panel
-        var pnlLogsAndRecovery = new Panel { Dock = DockStyle.Fill };
-        _txtLogMessages.Dock = DockStyle.Fill;
-        _txtLogMessages.Multiline = true;
-        _txtLogMessages.ReadOnly = true;
-        _txtLogMessages.Font = UITheme.FontMonospace;
-        _txtLogMessages.ScrollBars = ScrollBars.Vertical;
+        _lblStepsRatio.Text = "0 / 0";
+        _lblStepsRatio.Font = UITheme.FontSubheader;
+        _lblStepsRatio.ForeColor = UITheme.Current.SuccessText;
+        _lblStepsRatio.AutoSize = true;
+        _lblStepsRatio.Dock = DockStyle.Right;
+        _lblStepsRatio.TextAlign = ContentAlignment.MiddleRight;
+        pnlProgressHeader.Controls.Add(_lblStepsRatio, 1, 0);
+        pnlProgressCard.Controls.Add(pnlProgressHeader);
 
-        _pnlRecovery.Dock = DockStyle.Bottom;
-        _pnlRecovery.Height = 85;
-        _pnlRecovery.BackColor = ColorTranslator.FromHtml("#FFF3CD"); // Safe warning banner
-        _pnlRecovery.Padding = new Padding(12);
-        _pnlRecovery.Visible = false;
+        _progressBar.Dock = DockStyle.Bottom;
+        _progressBar.Height = 10;
+        pnlProgressCard.Controls.Add(_progressBar);
+        pnlTop.Controls.Add(pnlProgressCard);
 
-        _lblRecoveryMessage.Dock = DockStyle.Fill;
-        _lblRecoveryMessage.Font = UITheme.FontBody;
-        _lblRecoveryMessage.ForeColor = ColorTranslator.FromHtml("#856404");
-        _lblRecoveryMessage.Text = "Safe Recovery Information";
-        _pnlRecovery.Controls.Add(_lblRecoveryMessage);
+        // Bottom Container (Pinned Action buttons, Logs, Recovery)
+        var pnlBottom = new Panel
+        {
+            Dock = DockStyle.Bottom,
+            AutoSize = true,
+            Margin = new Padding(0)
+        };
 
-        pnlLogsAndRecovery.Controls.Add(_txtLogMessages);
-        pnlLogsAndRecovery.Controls.Add(_pnlRecovery);
-        layout.Controls.Add(pnlLogsAndRecovery, 0, 3);
+        // 3. Action Buttons (Pause & Stop large cards side-by-side)
+        var pnlActionCards = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            ColumnCount = 2,
+            RowCount = 1,
+            Height = 50,
+            Margin = new Padding(0, 8, 0, 10)
+        };
+        pnlActionCards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        pnlActionCards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
 
-        // 5. Buttons
-        var pnlButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0, 12, 0, 0) };
-
-        _btnPauseResume.Text = "⏸ Pause";
-        _btnPauseResume.Size = new Size(130, 38);
-        _btnPauseResume.Enabled = false;
-        _btnPauseResume.Click += async (_, _) =>
+        _btnPause.Dock = DockStyle.Fill;
+        _btnPause.Text = "⏸  Pause";
+        _btnPause.Font = UITheme.FontBodyBold;
+        _btnPause.FlatStyle = FlatStyle.Flat;
+        _btnPause.FlatAppearance.BorderSize = 1;
+        _btnPause.FlatAppearance.BorderColor = UITheme.Current.CardBorder;
+        _btnPause.BackColor = UITheme.Current.CardSurface;
+        _btnPause.ForeColor = UITheme.Current.PrimaryText;
+        _btnPause.Margin = new Padding(0, 0, 6, 0);
+        _btnPause.Enabled = false;
+        _btnPause.Click += async (_, _) =>
         {
             if (_controller.CurrentState == ExecutionState.Running)
                 await _controller.PauseAsync();
             else if (_controller.CurrentState == ExecutionState.Paused)
                 await _controller.ResumeAsync();
         };
+        pnlActionCards.Controls.Add(_btnPause, 0, 0);
 
-        _btnStop.Text = "■ Stop Playback";
-        _btnStop.Size = new Size(140, 38);
+        _btnStop.Dock = DockStyle.Fill;
+        _btnStop.Text = "⏹  Stop";
+        _btnStop.Font = UITheme.FontBodyBold;
+        _btnStop.FlatStyle = FlatStyle.Flat;
+        _btnStop.FlatAppearance.BorderSize = 1;
+        _btnStop.FlatAppearance.BorderColor = UITheme.Current.CardBorder;
+        _btnStop.BackColor = UITheme.Current.CardSurface;
+        _btnStop.ForeColor = UITheme.Current.Error;
+        _btnStop.Margin = new Padding(6, 0, 0, 0);
         _btnStop.Enabled = false;
         _btnStop.Click += async (_, _) => await _controller.StopAsync();
+        pnlActionCards.Controls.Add(_btnStop, 1, 0);
+        pnlBottom.Controls.Add(pnlActionCards);
 
-        _btnEmergencyStop.Text = "🛑 EMERGENCY STOP (Ctrl+Shift+S)";
+        // 4. Emergency Stop & Logs Toggle Row
+        var pnlAuxRow = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            ColumnCount = 2,
+            RowCount = 1,
+            Height = 36,
+            Margin = new Padding(0, 0, 0, 8)
+        };
+        pnlAuxRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        pnlAuxRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        _btnEmergencyStop.Text = "🛑 Emergency Stop (Ctrl+Shift+S)";
         _btnEmergencyStop.Tag = "danger";
-        _btnEmergencyStop.Size = new Size(260, 38);
+        _btnEmergencyStop.Size = new Size(240, 34);
+        _btnEmergencyStop.FlatStyle = FlatStyle.Flat;
+        _btnEmergencyStop.Font = UITheme.FontSmall;
         _btnEmergencyStop.Enabled = false;
         _btnEmergencyStop.Click += async (_, _) => await _controller.EmergencyStopAsync();
+        pnlAuxRow.Controls.Add(_btnEmergencyStop, 0, 0);
 
-        pnlButtons.Controls.AddRange(new Control[] { _btnPauseResume, _btnStop, _btnEmergencyStop });
-        layout.Controls.Add(pnlButtons, 0, 4);
+        _btnToggleLogs.Text = "📋 View Logs ▼";
+        _btnToggleLogs.Size = new Size(130, 34);
+        _btnToggleLogs.FlatStyle = FlatStyle.Flat;
+        _btnToggleLogs.FlatAppearance.BorderSize = 1;
+        _btnToggleLogs.FlatAppearance.BorderColor = UITheme.Current.CardBorder;
+        _btnToggleLogs.BackColor = UITheme.Current.CardSurface;
+        _btnToggleLogs.ForeColor = UITheme.Current.SecondaryText;
+        _btnToggleLogs.Font = UITheme.FontSmall;
+        _btnToggleLogs.Click += (_, _) => ToggleLogs();
+        pnlAuxRow.Controls.Add(_btnToggleLogs, 1, 0);
+        pnlBottom.Controls.Add(pnlAuxRow);
 
-        Controls.Add(layout);
+        // 5. Recovery & Log Box
+        _pnlLogsHost.Dock = DockStyle.Top;
+        _pnlLogsHost.AutoSize = true;
+        _pnlLogsHost.Margin = new Padding(0, 0, 0, 8);
+
+        _pnlRecovery.Dock = DockStyle.Top;
+        _pnlRecovery.Height = 70;
+        _pnlRecovery.BackColor = UITheme.Current.WarningSurface;
+        _pnlRecovery.Padding = new Padding(12);
+        _pnlRecovery.Visible = false;
+        _lblRecoveryMessage.Dock = DockStyle.Fill;
+        _lblRecoveryMessage.Font = UITheme.FontBody;
+        _lblRecoveryMessage.ForeColor = UITheme.Current.Warning;
+        _pnlRecovery.Controls.Add(_lblRecoveryMessage);
+        _pnlLogsHost.Controls.Add(_pnlRecovery);
+
+        _txtLogMessages.Dock = DockStyle.Top;
+        _txtLogMessages.Height = 140;
+        _txtLogMessages.Multiline = true;
+        _txtLogMessages.ReadOnly = true;
+        _txtLogMessages.ScrollBars = ScrollBars.Vertical;
+        _txtLogMessages.Font = UITheme.FontMonospace;
+        _txtLogMessages.BackColor = UITheme.Current.SecondarySurface;
+        _txtLogMessages.ForeColor = UITheme.Current.PrimaryText;
+        _txtLogMessages.Visible = false;
+        _pnlLogsHost.Controls.Add(_txtLogMessages);
+        pnlBottom.Controls.Add(_pnlLogsHost);
+
+        // 2. Steps Timeline Container (Center Fill)
+        _pnlStepsContainer.Dock = DockStyle.Fill;
+        _pnlStepsContainer.AutoScroll = true;
+        _pnlStepsContainer.Padding = new Padding(0, 4, 0, 4);
+
+        Controls.Add(_pnlStepsContainer);
+        Controls.Add(pnlBottom);
+        Controls.Add(pnlTop);
+
+        UITheme.Apply(this);
     }
 
-    private void PopulateStepsList(WorkflowDefinition workflow)
+    private void ToggleLogs()
     {
-        _listStepProgress.Items.Clear();
-        for (int i = 0; i < workflow.Actions.Count; i++)
+        _logsExpanded = !_logsExpanded;
+        _txtLogMessages.Visible = _logsExpanded;
+        _btnToggleLogs.Text = _logsExpanded ? "📋 Hide Logs ▲" : "📋 View Logs ▼";
+    }
+
+    public async Task StartExecutionAsync(WorkflowDefinition workflow, bool isLive = true)
+    {
+        _activeWorkflow = workflow;
+        _isLiveExecution = isLive;
+
+        _lblWorkflowTitle.Text = workflow.Name;
+        _lblWorkflowSubtitle.Text = isLive ? "Workflow execution" : "Dry run simulation (preview)";
+        _progressBar.Maximum = Math.Max(1, workflow.Actions.Count);
+        _progressBar.Value = 0;
+        _lblStepsRatio.Text = $"0 / {workflow.Actions.Count}";
+        _pnlRecovery.Visible = false;
+
+        PopulateStepCards(workflow);
+
+        _txtLogMessages.Clear();
+        _txtLogMessages.AppendText($"[INFO] Starting {(isLive ? "live execution" : "dry run")} for '{workflow.Name}'...\r\n");
+
+        _btnPause.Enabled = true;
+        _btnPause.Text = "⏸  Pause";
+        _btnStop.Enabled = true;
+        _btnEmergencyStop.Enabled = true;
+
+        try
         {
-            var a = workflow.Actions[i];
-            var item = new ListViewItem((i + 1).ToString());
-            item.SubItems.Add(a.Type);
-            item.SubItems.Add(a.Description ?? a.Id);
-            item.SubItems.Add(a.Target?.ProcessName ?? a.Target?.WindowTitle ?? "Desktop");
-            item.SubItems.Add("[⋯ Pending]");
-            item.Tag = a;
-            _listStepProgress.Items.Add(item);
+            var record = await _controller.StartAsync(workflow, dryRun: !isLive);
+
+            await _historyRepo.RecordRunAsync(record);
+
+            if (record.FinalState == ExecutionState.Failed)
+            {
+                ShowRecoveryPanel(record);
+            }
         }
+        catch (Exception ex)
+        {
+            _txtLogMessages.AppendText($"[ERROR] {ex.Message}\r\n");
+            UpdateStatusPill(ExecutionState.Failed);
+        }
+    }
+
+    private void PopulateStepCards(WorkflowDefinition workflow)
+    {
+        _pnlStepsContainer.Controls.Clear();
+        _stepCards.Clear();
+        _pnlStepsContainer.SuspendLayout();
+
+        for (int i = workflow.Actions.Count - 1; i >= 0; i--)
+        {
+            var action = workflow.Actions[i];
+            int stepNum = i + 1;
+            var item = new StepCardItem(stepNum, action);
+            _stepCards.Insert(0, item);
+            _pnlStepsContainer.Controls.Add(item.CardPanel);
+        }
+
+        _pnlStepsContainer.ResumeLayout();
     }
 
     private void OnStateChanged(ExecutionState state)
@@ -218,47 +356,66 @@ public sealed class RunMonitorView : UserControl
             return;
         }
 
-        _lblStateStatus.Text = $"[{state.ToString().ToUpperInvariant()}]";
+        UpdateStatusPill(state);
 
         switch (state)
         {
             case ExecutionState.Running:
-                _lblStateStatus.ForeColor = Color.Green;
-                _btnPauseResume.Text = "⏸ Pause";
-                _btnPauseResume.Enabled = true;
+                _btnPause.Text = "⏸  Pause";
+                _btnPause.Enabled = true;
                 _btnStop.Enabled = true;
                 _btnEmergencyStop.Enabled = true;
                 break;
 
             case ExecutionState.Paused:
-                _lblStateStatus.ForeColor = Color.Orange;
-                _btnPauseResume.Text = "▶ Resume";
-                _btnPauseResume.Enabled = true;
-                break;
-
-            case ExecutionState.AwaitingConfirmation:
-                _lblStateStatus.ForeColor = Color.Purple;
+                _btnPause.Text = "▶  Resume";
+                _btnPause.Enabled = true;
                 break;
 
             case ExecutionState.Completed:
-                _lblStateStatus.ForeColor = Color.Green;
-                _btnPauseResume.Enabled = false;
-                _btnStop.Enabled = false;
-                _btnEmergencyStop.Enabled = false;
-                break;
-
             case ExecutionState.Failed:
-                _lblStateStatus.ForeColor = Color.Red;
-                _btnPauseResume.Enabled = false;
+            case ExecutionState.Cancelled:
+            case ExecutionState.Idle:
+                _btnPause.Enabled = false;
                 _btnStop.Enabled = false;
                 _btnEmergencyStop.Enabled = false;
                 break;
+        }
+    }
 
-            case ExecutionState.Cancelled:
-                _lblStateStatus.ForeColor = Color.Gray;
-                _btnPauseResume.Enabled = false;
-                _btnStop.Enabled = false;
-                _btnEmergencyStop.Enabled = false;
+    private void UpdateStatusPill(ExecutionState state)
+    {
+        switch (state)
+        {
+            case ExecutionState.Running:
+                _lblStatusPill.Text = "  Running  ";
+                _lblStatusPill.BackColor = UITheme.Current.SuccessSurface;
+                _lblStatusPill.ForeColor = UITheme.Current.SuccessText;
+                break;
+            case ExecutionState.Paused:
+                _lblStatusPill.Text = "  Paused  ";
+                _lblStatusPill.BackColor = UITheme.Current.WarningSurface;
+                _lblStatusPill.ForeColor = UITheme.Current.Warning;
+                break;
+            case ExecutionState.Completed:
+                _lblStatusPill.Text = "  Completed  ";
+                _lblStatusPill.BackColor = UITheme.Current.SuccessSurface;
+                _lblStatusPill.ForeColor = UITheme.Current.SuccessText;
+                break;
+            case ExecutionState.Failed:
+                _lblStatusPill.Text = "  Failed  ";
+                _lblStatusPill.BackColor = UITheme.Current.ErrorSurface;
+                _lblStatusPill.ForeColor = UITheme.Current.Error;
+                break;
+            case ExecutionState.AwaitingConfirmation:
+                _lblStatusPill.Text = "  Confirmation  ";
+                _lblStatusPill.BackColor = ColorTranslator.FromHtml("#3B0764");
+                _lblStatusPill.ForeColor = ColorTranslator.FromHtml("#C084FC");
+                break;
+            default:
+                _lblStatusPill.Text = $"  {state}  ";
+                _lblStatusPill.BackColor = UITheme.Current.SecondarySurface;
+                _lblStatusPill.ForeColor = UITheme.Current.SecondaryText;
                 break;
         }
     }
@@ -271,33 +428,29 @@ public sealed class RunMonitorView : UserControl
             return;
         }
 
-        if (stepIndex <= _progressBar.Maximum)
+        int max = _progressBar.Maximum;
+        if (stepIndex <= max)
         {
             _progressBar.Value = stepIndex;
-            _lblProgressRatio.Text = $"{stepIndex} / {_progressBar.Maximum}";
+            _lblStepsRatio.Text = $"{stepIndex} / {max}";
         }
 
-        _lblCurrentTarget.Text = $"Target: {_controller.CurrentTargetInfo ?? "Desktop"}";
-
         int idx = stepIndex - 1;
-        if (idx >= 0 && idx < _listStepProgress.Items.Count)
+        if (idx >= 0 && idx < _stepCards.Count)
         {
-            var item = _listStepProgress.Items[idx];
+            var card = _stepCards[idx];
+            _pnlStepsContainer.ScrollControlIntoView(card.CardPanel);
             if (result is null)
             {
-                item.SubItems[4].Text = "[● Running]";
-                item.Selected = true;
-                _listStepProgress.EnsureVisible(idx);
+                card.SetState(StepVisualState.InProgress, "In progress");
             }
             else if (result.IsSuccess)
             {
-                item.SubItems[4].Text = $"[✓ {result.Status}]";
-                item.ForeColor = Color.DarkGreen;
+                card.SetState(StepVisualState.Verified, "Verified");
             }
             else
             {
-                item.SubItems[4].Text = $"[✕ {result.Status}]";
-                item.ForeColor = Color.Red;
+                card.SetState(StepVisualState.Failed, $"Failed: {result.SafeMessage}");
             }
         }
     }
@@ -325,7 +478,7 @@ public sealed class RunMonitorView : UserControl
             "High-Impact Action Confirmation Required",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question,
-            MessageBoxDefaultButton.Button2); // Default to safest option (No)
+            MessageBoxDefaultButton.Button2);
 
         return Task.FromResult(result == DialogResult.Yes);
     }
@@ -339,7 +492,143 @@ public sealed class RunMonitorView : UserControl
 
         _lblRecoveryMessage.Text =
             $"⚠️ WORKFLOW STOPPED: {record.SafeErrorMessage}\n" +
-            $"Status: {checkpoint}. Target state may be partially altered.\n" +
-            "Safe Next Steps: Inspect the target application manually. Do NOT blindly retry non-idempotent actions.";
+            $"Status: {checkpoint}.\n" +
+            "Safe Next Steps: Target application was not modified beyond the failed step.";
+    }
+
+    private enum StepVisualState { Pending, InProgress, Verified, Failed, Confirmation }
+
+    private sealed class StepCardItem
+    {
+        public TableLayoutPanel CardPanel { get; }
+        private readonly Label _lblIcon = new();
+        private readonly Label _lblTitle = new();
+        private readonly Label _lblSubtitle = new();
+
+        public StepCardItem(int stepNumber, WorkflowAction action)
+        {
+            CardPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                MinimumSize = new Size(0, 52),
+                ColumnCount = 2,
+                RowCount = 1,
+                BackColor = UITheme.Current.CardSurface,
+                Padding = new Padding(12, 8, 12, 8),
+                Margin = new Padding(0, 0, 0, 6)
+            };
+            CardPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            CardPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+            // Icon / Number circle
+            _lblIcon.Text = stepNumber.ToString();
+            _lblIcon.Font = UITheme.FontBodyBold;
+            _lblIcon.ForeColor = UITheme.Current.SecondaryText;
+            _lblIcon.BackColor = UITheme.Current.WindowBackground;
+            _lblIcon.Size = new Size(28, 28);
+            _lblIcon.TextAlign = ContentAlignment.MiddleCenter;
+            _lblIcon.Margin = new Padding(0, 4, 12, 0);
+            CardPanel.Controls.Add(_lblIcon, 0, 0);
+
+            // Title & Subtitle
+            var pnlText = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.TopDown,
+                AutoSize = true,
+                Margin = new Padding(0)
+            };
+
+            string title = action.Description ?? $"{action.Type} action";
+            _lblTitle.Text = title;
+            _lblTitle.Font = UITheme.FontBodyBold;
+            _lblTitle.ForeColor = UITheme.Current.PrimaryText;
+            _lblTitle.AutoSize = true;
+
+            string sub = action.RequiresConfirmation ? "Confirmation required" : "Pending";
+            _lblSubtitle.Text = sub;
+            _lblSubtitle.Font = UITheme.FontSmall;
+            _lblSubtitle.ForeColor = action.RequiresConfirmation ? UITheme.Current.Warning : UITheme.Current.SecondaryText;
+            _lblSubtitle.AutoSize = true;
+            _lblSubtitle.Margin = new Padding(0, 2, 0, 0);
+
+            pnlText.Controls.AddRange(new Control[] { _lblTitle, _lblSubtitle });
+            CardPanel.Controls.Add(pnlText, 1, 0);
+        }
+
+        public void SetState(StepVisualState state, string subtitle)
+        {
+            _lblSubtitle.Text = subtitle;
+            switch (state)
+            {
+                case StepVisualState.Verified:
+                    _lblIcon.Text = "✓";
+                    _lblIcon.BackColor = UITheme.Current.SuccessSurface;
+                    _lblIcon.ForeColor = UITheme.Current.SuccessText;
+                    _lblSubtitle.ForeColor = UITheme.Current.SuccessText;
+                    break;
+                case StepVisualState.InProgress:
+                    _lblIcon.Text = "⟳";
+                    _lblIcon.BackColor = ColorTranslator.FromHtml("#0C4A6E");
+                    _lblIcon.ForeColor = ColorTranslator.FromHtml("#38BDF8");
+                    _lblSubtitle.ForeColor = ColorTranslator.FromHtml("#38BDF8");
+                    break;
+                case StepVisualState.Failed:
+                    _lblIcon.Text = "✕";
+                    _lblIcon.BackColor = UITheme.Current.ErrorSurface;
+                    _lblIcon.ForeColor = UITheme.Current.Error;
+                    _lblSubtitle.ForeColor = UITheme.Current.Error;
+                    break;
+                case StepVisualState.Confirmation:
+                    _lblIcon.Text = "!";
+                    _lblIcon.BackColor = UITheme.Current.WarningSurface;
+                    _lblIcon.ForeColor = UITheme.Current.Warning;
+                    _lblSubtitle.ForeColor = UITheme.Current.Warning;
+                    break;
+            }
+        }
+    }
+
+    private sealed class CustomProgressBar : Control
+    {
+        private int _value = 0;
+        private int _maximum = 100;
+
+        public int Value
+        {
+            get => _value;
+            set { _value = Math.Clamp(value, 0, _maximum); Invalidate(); }
+        }
+
+        public int Maximum
+        {
+            get => _maximum;
+            set { _maximum = Math.Max(1, value); Invalidate(); }
+        }
+
+        public CustomProgressBar()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            var rect = ClientRectangle;
+            using var bgBrush = new SolidBrush(UITheme.Current.WindowBackground);
+            g.FillRectangle(bgBrush, rect);
+
+            float pct = (float)_value / _maximum;
+            int fillW = (int)(rect.Width * pct);
+            if (fillW > 0)
+            {
+                var fillRect = new Rectangle(rect.X, rect.Y, fillW, rect.Height);
+                using var fillBrush = new SolidBrush(UITheme.Current.Success);
+                g.FillRectangle(fillBrush, fillRect);
+            }
+        }
     }
 }

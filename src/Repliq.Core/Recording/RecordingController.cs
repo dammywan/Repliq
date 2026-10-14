@@ -41,7 +41,7 @@ public sealed class RecordingConfig
     public int MinEventIntervalMs { get; set; } = 50; // Filter micro-jitter
     public HashSet<string> ExcludedProcesses { get; set; } = new(StringComparer.OrdinalIgnoreCase)
     {
-        "repliq.app.exe", "repliq.exe"
+        "repliq.app.exe", "repliq.exe", "repliq.quick.exe", "repliq.quick"
     };
     public bool ExcludeSensitiveFields { get; set; } = true;
 }
@@ -51,7 +51,9 @@ public interface IRecordingController
     RecordingState State { get; }
     TimeSpan ElapsedTime { get; }
     int CapturedEventCount { get; }
+    int RedactedEventCount { get; }
     string? CurrentTargetWindow { get; }
+    WorkflowDefinition? CurrentDraftWorkflow { get; }
 
     event Action<RecordingState>? StateChanged;
     event Action<WorkflowAction>? ActionCaptured;
@@ -75,6 +77,7 @@ public sealed class RecordingController : IRecordingController
     private string? _currentTargetWindow;
     private string? _currentTargetProcess;
     private int _redactedEventCount = 0;
+    private WorkflowDefinition? _currentDraftWorkflow;
 
     public RecordingState State
     {
@@ -96,6 +99,7 @@ public sealed class RecordingController : IRecordingController
     public int CapturedEventCount { get { lock (_lock) return _recordedActions.Count; } }
     public int RedactedEventCount => _redactedEventCount;
     public string? CurrentTargetWindow => _currentTargetWindow;
+    public WorkflowDefinition? CurrentDraftWorkflow { get { lock (_lock) return _currentDraftWorkflow; } }
 
     public event Action<RecordingState>? StateChanged;
     public event Action<WorkflowAction>? ActionCaptured;
@@ -121,6 +125,7 @@ public sealed class RecordingController : IRecordingController
             _lastEventTime = _startedUtc;
             _currentTargetWindow = null;
             _currentTargetProcess = null;
+            _currentDraftWorkflow = null;
             State = RecordingState.Starting;
         }
 
@@ -139,6 +144,20 @@ public sealed class RecordingController : IRecordingController
         WorkflowDefinition workflow;
         lock (_lock)
         {
+            var allowedProcs = _recordedActions
+                .Select(a => a.Target?.ProcessName)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p => Path.GetFileName(p!))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (!string.IsNullOrWhiteSpace(_currentTargetProcess))
+            {
+                var fn = Path.GetFileName(_currentTargetProcess);
+                if (!allowedProcs.Contains(fn, StringComparer.OrdinalIgnoreCase))
+                    allowedProcs.Add(fn);
+            }
+
             workflow = new WorkflowDefinition
             {
                 Name = workflowName,
@@ -146,10 +165,11 @@ public sealed class RecordingController : IRecordingController
                 ModifiedUtc = DateTime.UtcNow,
                 TargetPolicy = new TargetPolicy
                 {
-                    AllowedProcesses = _currentTargetProcess is not null ? new List<string> { _currentTargetProcess } : new List<string>()
+                    AllowedProcesses = allowedProcs
                 },
                 Actions = new List<WorkflowAction>(_recordedActions)
             };
+            _currentDraftWorkflow = workflow;
             State = RecordingState.Review;
         }
 
@@ -164,6 +184,7 @@ public sealed class RecordingController : IRecordingController
         lock (_lock)
         {
             _recordedActions.Clear();
+            _currentDraftWorkflow = null;
             State = RecordingState.Idle;
         }
         LogMessage?.Invoke("Recording cancelled.");
@@ -179,23 +200,36 @@ public sealed class RecordingController : IRecordingController
             // Check event count bounds
             if (_recordedActions.Count >= _config.MaxEvents)
             {
+                State = RecordingState.Stopping;
                 LogMessage?.Invoke($"Maximum recording events ({_config.MaxEvents}) reached. Halting capture.");
-                Task.Run(() => StopAsync());
+                Task.Run(async () => await StopAsync());
                 return;
             }
 
             // Check duration bounds
             if (ElapsedTime.TotalSeconds >= _config.MaxDurationSeconds)
             {
+                State = RecordingState.Stopping;
                 LogMessage?.Invoke($"Maximum recording duration ({_config.MaxDurationSeconds}s) reached. Halting capture.");
-                Task.Run(() => StopAsync());
+                Task.Run(async () => await StopAsync());
                 return;
             }
 
             // Filter Repliq's own windows
-            if (!string.IsNullOrWhiteSpace(raw.ProcessName) && _config.ExcludedProcesses.Contains(raw.ProcessName))
+            if (!string.IsNullOrWhiteSpace(raw.ProcessName))
             {
-                return;
+                var proc = raw.ProcessName.Trim();
+                var fileName = Path.GetFileName(proc);
+                var nameWithoutExt = Path.GetFileNameWithoutExtension(proc);
+                var nameWithExt = nameWithoutExt + ".exe";
+
+                if (_config.ExcludedProcesses.Contains(proc) ||
+                    _config.ExcludedProcesses.Contains(fileName) ||
+                    _config.ExcludedProcesses.Contains(nameWithExt) ||
+                    _config.ExcludedProcesses.Contains(nameWithoutExt))
+                {
+                    return;
+                }
             }
 
             // Filter sensitive fields
@@ -246,6 +280,9 @@ public sealed class RecordingController : IRecordingController
                     break;
 
                 case "key":
+                    if (string.IsNullOrWhiteSpace(raw.Key) || string.Equals(raw.Key, "None", StringComparison.OrdinalIgnoreCase))
+                        break;
+
                     action = new WorkflowAction
                     {
                         Type = ActionTypes.KeyPress,

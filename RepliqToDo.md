@@ -1,6 +1,8 @@
 # Repliq — Implementation To-Do List
 
 **Project goal:** Build a secure, safe, local-first, resource-conscious Windows desktop workflow automation application.  
+**Developer:** RetsardCo (2026)  
+**Version:** 0.1.0-alpha  
 **Implementation approach:** C# / .NET, a single chosen native Windows UI framework (WinForms on .NET 8), Windows UI Automation where supported, declarative workflow files, and test-first security controls.
 
 ## How to use this checklist

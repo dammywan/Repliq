@@ -1,4 +1,4 @@
-using System.Text.Json;
+using System.Drawing;
 using Repliq.Core.Models;
 using Repliq.Core.Validation;
 using Repliq.Storage.Workflows;
@@ -14,12 +14,13 @@ public sealed class WorkflowsView : UserControl
     private readonly ComboBox _cmbFilter = new();
     private readonly ListView _listWorkflows = new();
     private readonly TextBox _txtWorkflowDetails = new();
-    private readonly Button _btnRun = new();
-    private readonly Button _btnDryRun = new();
-    private readonly Button _btnEdit = new();
-    private readonly Button _btnDelete = new();
-    private readonly Button _btnExport = new();
-    private readonly Button _btnImport = new();
+    private readonly ThemedButton _btnRun = new();
+    private readonly ThemedButton _btnDryRun = new();
+    private readonly ThemedButton _btnEdit = new();
+    private readonly ThemedButton _btnDelete = new();
+    private readonly ThemedButton _btnExport = new();
+    private readonly ThemedButton _btnImport = new();
+    private SplitContainer? _split;
 
     private List<WorkflowDefinition> _allWorkflows = new();
     private WorkflowDefinition? _selectedWorkflow;
@@ -34,7 +35,9 @@ public sealed class WorkflowsView : UserControl
     private void InitializeComponents()
     {
         Dock = DockStyle.Fill;
-        Padding = new Padding(24);
+        Padding = new Padding(24, 18, 24, 18);
+        AutoScroll = true;
+        AutoScaleMode = AutoScaleMode.Dpi;
 
         var mainLayout = new TableLayoutPanel
         {
@@ -47,33 +50,56 @@ public sealed class WorkflowsView : UserControl
         mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Bottom Action buttons
 
         // Top bar
-        var pnlTop = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0, 0, 0, 12) };
-        var lblTitle = new Label { Text = "Workflows Library", Font = UITheme.FontHeader, AutoSize = true, Margin = new Padding(0, 4, 16, 0) };
+        var pnlTop = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 14)
+        };
+        var lblTitle = new Label
+        {
+            Text = "Workflows Library",
+            Font = UITheme.FontHeader,
+            ForeColor = UITheme.Current.PrimaryText,
+            AutoSize = true,
+            Margin = new Padding(0, 4, 16, 0)
+        };
 
         _txtSearch.PlaceholderText = "Search workflows...";
-        _txtSearch.Width = 220;
-        _txtSearch.Height = 32;
+        _txtSearch.Width = 240;
+        _txtSearch.Font = UITheme.FontBody;
+        _txtSearch.BackColor = UITheme.Current.CardSurface;
+        _txtSearch.ForeColor = UITheme.Current.PrimaryText;
         _txtSearch.TextChanged += (_, _) => ApplyFilter();
 
         _cmbFilter.DropDownStyle = ComboBoxStyle.DropDownList;
         _cmbFilter.Items.AddRange(new object[] { "All Workflows", "Ready to Run", "Needs Review" });
         _cmbFilter.SelectedIndex = 0;
-        _cmbFilter.Width = 140;
+        _cmbFilter.Width = 150;
+        _cmbFilter.Font = UITheme.FontBody;
+        _cmbFilter.BackColor = UITheme.Current.CardSurface;
+        _cmbFilter.ForeColor = UITheme.Current.PrimaryText;
         _cmbFilter.SelectedIndexChanged += (_, _) => ApplyFilter();
 
         _btnImport.Text = "Import JSON";
-        _btnImport.Width = 110;
+        _btnImport.Width = 120;
+        _btnImport.Height = 32;
+        _btnImport.FlatStyle = FlatStyle.Flat;
+        _btnImport.FlatAppearance.BorderSize = 1;
+        _btnImport.FlatAppearance.BorderColor = UITheme.Current.CardBorder;
+        _btnImport.BackColor = UITheme.Current.CardSurface;
+        _btnImport.ForeColor = UITheme.Current.PrimaryText;
         _btnImport.Click += async (_, _) => await ImportWorkflowAsync();
 
         pnlTop.Controls.AddRange(new Control[] { lblTitle, _txtSearch, _cmbFilter, _btnImport });
         mainLayout.Controls.Add(pnlTop, 0, 0);
 
         // Center split
-        var split = new SplitContainer
+        _split = new SplitContainer
         {
             Dock = DockStyle.Fill,
             Orientation = Orientation.Vertical,
-            SplitterDistance = 620
+            Margin = new Padding(0, 0, 0, 12)
         };
 
         _listWorkflows.Dock = DockStyle.Fill;
@@ -81,27 +107,45 @@ public sealed class WorkflowsView : UserControl
         _listWorkflows.FullRowSelect = true;
         _listWorkflows.MultiSelect = false;
         _listWorkflows.Font = UITheme.FontBody;
-        _listWorkflows.Columns.Add("Name", 220);
-        _listWorkflows.Columns.Add("Target Processes", 180);
+        _listWorkflows.BackColor = UITheme.Current.CardSurface;
+        _listWorkflows.ForeColor = UITheme.Current.PrimaryText;
+        _listWorkflows.BorderStyle = BorderStyle.FixedSingle;
+        _listWorkflows.Columns.Add("Name", 200);
+        _listWorkflows.Columns.Add("Target Processes", 160);
         _listWorkflows.Columns.Add("Steps", 70);
-        _listWorkflows.Columns.Add("Status", 130);
+        _listWorkflows.Columns.Add("Status", 120);
         _listWorkflows.SelectedIndexChanged += OnSelectionChanged;
-        split.Panel1.Controls.Add(_listWorkflows);
+        _listWorkflows.Resize += (_, _) => AdjustListViewColumns();
+        _split.Panel1.Controls.Add(_listWorkflows);
 
         _txtWorkflowDetails.Dock = DockStyle.Fill;
         _txtWorkflowDetails.Multiline = true;
         _txtWorkflowDetails.ReadOnly = true;
         _txtWorkflowDetails.ScrollBars = ScrollBars.Vertical;
         _txtWorkflowDetails.Font = UITheme.FontMonospace;
-        split.Panel2.Controls.Add(_txtWorkflowDetails);
+        _txtWorkflowDetails.BackColor = UITheme.Current.CardSurface;
+        _txtWorkflowDetails.ForeColor = UITheme.Current.PrimaryText;
+        _txtWorkflowDetails.BorderStyle = BorderStyle.FixedSingle;
+        _txtWorkflowDetails.Text = "Select a workflow from the list to inspect permissions, steps, and target policy.";
+        _split.Panel2.Controls.Add(_txtWorkflowDetails);
 
-        mainLayout.Controls.Add(split, 0, 1);
+        mainLayout.Controls.Add(_split, 0, 1);
 
         // Bottom Actions
-        var pnlBottom = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(0, 12, 0, 0) };
+        var pnlBottom = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            Margin = new Padding(0, 4, 0, 0)
+        };
+
         _btnRun.Text = "▶ Run Workflow";
         _btnRun.Tag = "primary";
-        _btnRun.Size = new Size(140, 38);
+        _btnRun.Size = new Size(150, 36);
+        _btnRun.FlatStyle = FlatStyle.Flat;
+        _btnRun.BackColor = UITheme.Current.AccentLight;
+        _btnRun.ForeColor = UITheme.Current.AccentLightText;
+        _btnRun.Font = UITheme.FontBodyBold;
         _btnRun.Enabled = false;
         _btnRun.Click += (_, _) =>
         {
@@ -109,7 +153,12 @@ public sealed class WorkflowsView : UserControl
         };
 
         _btnDryRun.Text = "🔍 Dry Run / Permissions";
-        _btnDryRun.Size = new Size(180, 38);
+        _btnDryRun.Size = new Size(190, 36);
+        _btnDryRun.FlatStyle = FlatStyle.Flat;
+        _btnDryRun.FlatAppearance.BorderSize = 1;
+        _btnDryRun.FlatAppearance.BorderColor = UITheme.Current.CardBorder;
+        _btnDryRun.BackColor = UITheme.Current.CardSurface;
+        _btnDryRun.ForeColor = UITheme.Current.PrimaryText;
         _btnDryRun.Enabled = false;
         _btnDryRun.Click += (_, _) =>
         {
@@ -117,7 +166,12 @@ public sealed class WorkflowsView : UserControl
         };
 
         _btnEdit.Text = "✏️ Edit Workflow";
-        _btnEdit.Size = new Size(140, 38);
+        _btnEdit.Size = new Size(140, 36);
+        _btnEdit.FlatStyle = FlatStyle.Flat;
+        _btnEdit.FlatAppearance.BorderSize = 1;
+        _btnEdit.FlatAppearance.BorderColor = UITheme.Current.CardBorder;
+        _btnEdit.BackColor = UITheme.Current.CardSurface;
+        _btnEdit.ForeColor = UITheme.Current.PrimaryText;
         _btnEdit.Enabled = false;
         _btnEdit.Click += (_, _) =>
         {
@@ -125,13 +179,21 @@ public sealed class WorkflowsView : UserControl
         };
 
         _btnExport.Text = "Export JSON";
-        _btnExport.Size = new Size(120, 38);
+        _btnExport.Size = new Size(120, 36);
+        _btnExport.FlatStyle = FlatStyle.Flat;
+        _btnExport.FlatAppearance.BorderSize = 1;
+        _btnExport.FlatAppearance.BorderColor = UITheme.Current.CardBorder;
+        _btnExport.BackColor = UITheme.Current.CardSurface;
+        _btnExport.ForeColor = UITheme.Current.PrimaryText;
         _btnExport.Enabled = false;
         _btnExport.Click += async (_, _) => await ExportWorkflowAsync();
 
         _btnDelete.Text = "🗑️ Delete";
         _btnDelete.Tag = "danger";
-        _btnDelete.Size = new Size(100, 38);
+        _btnDelete.Size = new Size(100, 36);
+        _btnDelete.FlatStyle = FlatStyle.Flat;
+        _btnDelete.BackColor = UITheme.Current.Error;
+        _btnDelete.ForeColor = Color.White;
         _btnDelete.Enabled = false;
         _btnDelete.Click += async (_, _) => await DeleteWorkflowAsync();
 
@@ -139,6 +201,34 @@ public sealed class WorkflowsView : UserControl
         mainLayout.Controls.Add(pnlBottom, 0, 2);
 
         Controls.Add(mainLayout);
+        UITheme.Apply(this);
+
+        Resize += (_, _) => AdjustSplitter();
+    }
+
+    private void AdjustSplitter()
+    {
+        if (_split is null || _split.Width <= 100) return;
+        int targetDist = (int)(_split.Width * 0.55);
+        int minDist = 40;
+        int maxDist = _split.Width - 40;
+        if (maxDist > minDist)
+        {
+            _split.SplitterDistance = Math.Clamp(targetDist, minDist, maxDist);
+        }
+        AdjustListViewColumns();
+    }
+
+    private void AdjustListViewColumns()
+    {
+        if (_listWorkflows.Columns.Count < 4) return;
+        int totalWidth = _listWorkflows.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 4;
+        if (totalWidth < 300) totalWidth = 300;
+
+        _listWorkflows.Columns[0].Width = (int)(totalWidth * 0.38);
+        _listWorkflows.Columns[1].Width = (int)(totalWidth * 0.30);
+        _listWorkflows.Columns[2].Width = (int)(totalWidth * 0.14);
+        _listWorkflows.Columns[3].Width = (int)(totalWidth * 0.18);
     }
 
     public async Task RefreshDataAsync()
@@ -182,6 +272,12 @@ public sealed class WorkflowsView : UserControl
             item.SubItems.Add(wf.Actions.Count.ToString());
             item.SubItems.Add(status);
             item.Tag = wf;
+
+            if (wf.Metadata.ContainsKey("RequiresReview"))
+                item.ForeColor = UITheme.Current.Warning;
+            else
+                item.ForeColor = UITheme.Current.PrimaryText;
+
             _listWorkflows.Items.Add(item);
         }
 

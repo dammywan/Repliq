@@ -16,7 +16,7 @@ public sealed class SettingsView : UserControl
     private readonly CheckBox _chkExcludeSensitive = new();
     private readonly CheckBox _chkAutoOpenQuickPanel = new();
     private readonly TextBox _txtStoragePath = new();
-    private readonly Button _btnSave = new();
+    private readonly ThemedButton _btnSave = new();
 
     private AppSettings _settings = new();
 
@@ -32,8 +32,9 @@ public sealed class SettingsView : UserControl
     private void InitializeComponents()
     {
         Dock = DockStyle.Fill;
-        Padding = new Padding(24);
+        Padding = new Padding(24, 18, 24, 18);
         AutoScroll = true;
+        AutoScaleMode = AutoScaleMode.Dpi;
 
         var layout = new FlowLayoutPanel
         {
@@ -110,6 +111,16 @@ public sealed class SettingsView : UserControl
         pnlStorage.Controls.AddRange(new Control[] { _chkExcludeSensitive, _chkAutoOpenQuickPanel, pnlRet, pnlPath });
         grpStorage.Controls.Add(pnlStorage);
         layout.Controls.Add(grpStorage);
+
+        // About & Attribution Group
+        var grpAbout = new GroupBox { Text = "About & Attribution", Width = 550, AutoSize = true, Font = UITheme.FontSubheader, Margin = new Padding(0, 0, 0, 16) };
+        var pnlAbout = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.TopDown, Padding = new Padding(12) };
+        var lblApp = new Label { Text = "Repliq — Desktop Workflow Automation (v0.1.0-alpha)", Font = UITheme.FontBodyBold, AutoSize = true, Margin = new Padding(0, 0, 0, 4) };
+        var lblDev = new Label { Text = "Developed by RetsardCo (2026)", Font = UITheme.FontBodyBold, ForeColor = ColorTranslator.FromHtml("#38BDF8"), AutoSize = true, Margin = new Padding(0, 0, 0, 4) };
+        var lblLic = new Label { Text = "Licensed under the MIT License. 100% Local-First & Zero Telemetry.", Font = UITheme.FontSmall, ForeColor = UITheme.Current.SecondaryText, AutoSize = true };
+        pnlAbout.Controls.AddRange(new Control[] { lblApp, lblDev, lblLic });
+        grpAbout.Controls.Add(pnlAbout);
+        layout.Controls.Add(grpAbout);
 
         // Save Button
         _btnSave.Text = "💾 Save Settings";

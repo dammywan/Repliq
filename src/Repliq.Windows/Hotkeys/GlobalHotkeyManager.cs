@@ -24,9 +24,18 @@ public sealed class GlobalHotkeyManager : Form, IHotkeyManager
     private int _currentId = 1000;
     private readonly Dictionary<int, (string actionName, Action callback)> _hotkeysById = new();
     private readonly Dictionary<string, (int id, string text)> _hotkeysByName = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _syncLock = new();
 
-    public IReadOnlyDictionary<string, string> RegisteredShortcuts =>
-        _hotkeysByName.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.text);
+    public IReadOnlyDictionary<string, string> RegisteredShortcuts
+    {
+        get
+        {
+            lock (_syncLock)
+            {
+                return _hotkeysByName.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.text);
+            }
+        }
+    }
 
     public GlobalHotkeyManager()
     {
@@ -70,12 +79,15 @@ public sealed class GlobalHotkeyManager : Form, IHotkeyManager
                 Success = false,
                 ActionName = actionName,
                 ShortcutText = shortcutText,
-                ErrorMessage = $"Shortcut '{shortcutText}' is already registered or reserved by another application (Error {err})."
+                ErrorMessage = $"Shortcut '{shortcutText}' is already registered or reserved by another application (Win32 Error {err})."
             };
         }
 
-        _hotkeysById[id] = (actionName, callback);
-        _hotkeysByName[actionName] = (id, shortcutText);
+        lock (_syncLock)
+        {
+            _hotkeysById[id] = (actionName, callback);
+            _hotkeysByName[actionName] = (id, shortcutText);
+        }
 
         return new HotkeyRegistrationResult
         {
@@ -87,22 +99,28 @@ public sealed class GlobalHotkeyManager : Form, IHotkeyManager
 
     public void UnregisterShortcut(string actionName)
     {
-        if (_hotkeysByName.TryGetValue(actionName, out var entry))
+        lock (_syncLock)
         {
-            UnregisterHotKey(Handle, entry.id);
-            _hotkeysById.Remove(entry.id);
-            _hotkeysByName.Remove(actionName);
+            if (_hotkeysByName.TryGetValue(actionName, out var entry))
+            {
+                UnregisterHotKey(Handle, entry.id);
+                _hotkeysById.Remove(entry.id);
+                _hotkeysByName.Remove(actionName);
+            }
         }
     }
 
     public void UnregisterAll()
     {
-        foreach (var entry in _hotkeysByName.Values)
+        lock (_syncLock)
         {
-            UnregisterHotKey(Handle, entry.id);
+            foreach (var entry in _hotkeysByName.Values)
+            {
+                UnregisterHotKey(Handle, entry.id);
+            }
+            _hotkeysById.Clear();
+            _hotkeysByName.Clear();
         }
-        _hotkeysById.Clear();
-        _hotkeysByName.Clear();
     }
 
     protected override void WndProc(ref Message m)
@@ -110,11 +128,21 @@ public sealed class GlobalHotkeyManager : Form, IHotkeyManager
         if (m.Msg == WM_HOTKEY)
         {
             int id = m.WParam.ToInt32();
-            if (_hotkeysById.TryGetValue(id, out var entry))
+            Action? callback = null;
+
+            lock (_syncLock)
+            {
+                if (_hotkeysById.TryGetValue(id, out var entry))
+                {
+                    callback = entry.callback;
+                }
+            }
+
+            if (callback is not null)
             {
                 Task.Run(() =>
                 {
-                    try { entry.callback.Invoke(); } catch { }
+                    try { callback.Invoke(); } catch { }
                 });
             }
         }
@@ -167,6 +195,20 @@ public sealed class GlobalHotkeyManager : Form, IHotkeyManager
             "ESC" or "ESCAPE" => 0x1B,
             "ENTER" or "RETURN" => 0x0D,
             "TAB" => 0x09,
+            "BACKSPACE" or "BACK" => 0x08,
+            "DELETE" or "DEL" => 0x2E,
+            "INSERT" or "INS" => 0x2D,
+            "HOME" => 0x24,
+            "END" => 0x23,
+            "PAGEUP" or "PGUP" => 0x21,
+            "PAGEDOWN" or "PGDN" => 0x22,
+            "UP" => 0x26,
+            "DOWN" => 0x28,
+            "LEFT" => 0x25,
+            "RIGHT" => 0x27,
+            "PAUSE" => 0x13,
+            "PLUS" or "ADD" => 0x6B,
+            "MINUS" or "SUBTRACT" => 0x6D,
             "F1" => 0x70,
             "F2" => 0x71,
             "F3" => 0x72,

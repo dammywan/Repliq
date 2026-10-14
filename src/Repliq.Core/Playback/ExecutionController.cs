@@ -17,8 +17,9 @@ public interface IExecutionController
     event Action<int, WorkflowAction, ActionExecutionResult?>? StepProgress;
     event Action<string>? LogMessage;
     event Func<WorkflowAction, Task<bool>>? ConfirmationRequested;
+    event Action<WorkflowRunRecord>? ExecutionCompleted;
 
-    Task<WorkflowRunRecord> StartAsync(WorkflowDefinition workflow, bool dryRun = false);
+    Task<WorkflowRunRecord> StartAsync(WorkflowDefinition workflow, bool dryRun = false, IReadOnlyDictionary<string, string>? variables = null);
     Task PauseAsync();
     Task ResumeAsync();
     Task StopAsync();
@@ -64,6 +65,7 @@ public sealed class ExecutionController : IExecutionController
     public event Action<int, WorkflowAction, ActionExecutionResult?>? StepProgress;
     public event Action<string>? LogMessage;
     public event Func<WorkflowAction, Task<bool>>? ConfirmationRequested;
+    public event Action<WorkflowRunRecord>? ExecutionCompleted;
 
     public ExecutionController(IAutomationBackend backend, IPolicyEngine? policyEngine = null)
     {
@@ -71,13 +73,30 @@ public sealed class ExecutionController : IExecutionController
         _policyEngine = policyEngine ?? new DefaultPolicyEngine();
     }
 
-    public async Task<WorkflowRunRecord> StartAsync(WorkflowDefinition workflow, bool dryRun = false)
+    public async Task<WorkflowRunRecord> StartAsync(
+        WorkflowDefinition workflow,
+        bool dryRun = false,
+        IReadOnlyDictionary<string, string>? variables = null)
     {
+        // If controller was left in Stopping or previous run is unwinding, wait briefly
+        if (CurrentState == ExecutionState.Stopping)
+        {
+            for (int i = 0; i < 15 && CurrentState == ExecutionState.Stopping; i++)
+            {
+                await Task.Delay(30);
+            }
+        }
+
         lock (_stateLock)
         {
-            if (_state is ExecutionState.Running or ExecutionState.Paused or ExecutionState.Starting)
+            if (_state == ExecutionState.Stopping)
             {
-                throw new InvalidOperationException("A workflow is already executing or paused.");
+                _state = ExecutionState.Cancelled;
+            }
+
+            if (_state is not (ExecutionState.Idle or ExecutionState.Completed or ExecutionState.Failed or ExecutionState.Cancelled))
+            {
+                throw new InvalidOperationException($"Cannot start workflow: current execution state is '{_state}'.");
             }
             CurrentState = ExecutionState.Starting;
             _currentWorkflow = workflow ?? throw new ArgumentNullException(nameof(workflow));
@@ -94,6 +113,7 @@ public sealed class ExecutionController : IExecutionController
         };
 
         var ct = _workflowCts.Token;
+        string? lastCheckpointId = null;
 
         try
         {
@@ -123,7 +143,18 @@ public sealed class ExecutionController : IExecutionController
             LogMessage?.Invoke(dryRun ? "Starting Dry Run (preview mode)..." : "Starting workflow playback...");
 
             _totalSteps = workflow.Actions.Count;
-            string? lastCheckpointId = null;
+
+            var effectiveVariables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (workflow.Variables is not null)
+            {
+                foreach (var kvp in workflow.Variables)
+                    effectiveVariables[kvp.Key] = kvp.Value;
+            }
+            if (variables is not null)
+            {
+                foreach (var kvp in variables)
+                    effectiveVariables[kvp.Key] = kvp.Value;
+            }
 
             for (int i = 0; i < workflow.Actions.Count; i++)
             {
@@ -146,6 +177,7 @@ public sealed class ExecutionController : IExecutionController
 
                 // Check target
                 _currentTargetInfo = action.Target?.ProcessName ?? action.Target?.WindowTitle ?? "Desktop";
+                runRecord.TargetProcess ??= action.Target?.ProcessName ?? action.Target?.WindowTitle;
 
                 // Step 3: Central policy check
                 var policyDecision = _policyEngine.EvaluateAction(action, workflow);
@@ -164,6 +196,67 @@ public sealed class ExecutionController : IExecutionController
                     return runRecord;
                 }
 
+                // Variable resolution for TypeText actions
+                var actionToExecute = action;
+                if (action.Type == ActionTypes.TypeText)
+                {
+                    actionToExecute = new WorkflowAction
+                    {
+                        Id = action.Id,
+                        Type = action.Type,
+                        Description = action.Description,
+                        DelayMs = action.DelayMs,
+                        TimeoutMs = action.TimeoutMs,
+                        Enabled = action.Enabled,
+                        RequiresConfirmation = action.RequiresConfirmation,
+                        IsIdempotent = action.IsIdempotent,
+                        Target = action.Target,
+                        Verification = action.Verification,
+                        Parameters = new Dictionary<string, object?>(action.Parameters)
+                    };
+
+                    if (action.Parameters.TryGetValue("variable", out var varNameObj) && varNameObj is not null)
+                    {
+                        var varName = varNameObj.ToString()!;
+                        if (effectiveVariables.TryGetValue(varName, out var resolvedVal))
+                        {
+                            actionToExecute.Parameters["text"] = resolvedVal;
+                        }
+                        else
+                        {
+                            var missingVarMsg = $"Missing required variable '{varName}' for step {_currentStepIndex}.";
+                            LogMessage?.Invoke(missingVarMsg);
+                            var varResult = ActionExecutionResult.Failure(action.Id, action.Type, missingVarMsg, "MISSING_VARIABLE");
+                            runRecord.StepResults.Add(varResult);
+                            runRecord.FailedActionId = action.Id;
+                            runRecord.SafeErrorMessage = missingVarMsg;
+                            runRecord.ErrorCode = "MISSING_VARIABLE";
+                            runRecord.FinalState = ExecutionState.Failed;
+                            CurrentState = ExecutionState.Failed;
+                            await _backend.ReleaseInputStateAsync();
+                            return runRecord;
+                        }
+                    }
+                    else if (action.Parameters.TryGetValue("text", out var textObj) && textObj is string tStr)
+                    {
+                        foreach (var (k, v) in effectiveVariables)
+                        {
+                            tStr = tStr.Replace("{" + k + "}", v);
+                            tStr = tStr.Replace("${Var:" + k + "}", v, StringComparison.OrdinalIgnoreCase);
+                        }
+
+                        var envMatches = System.Text.RegularExpressions.Regex.Matches(tStr, @"\$\{Env:([a-zA-Z0-9_]+)\}", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        foreach (System.Text.RegularExpressions.Match m in envMatches)
+                        {
+                            var envKey = m.Groups[1].Value;
+                            var envVal = Environment.GetEnvironmentVariable(envKey) ?? string.Empty;
+                            tStr = tStr.Replace(m.Value, envVal);
+                        }
+
+                        actionToExecute.Parameters["text"] = tStr;
+                    }
+                }
+
                 // Step 4: Confirmation gate
                 if (policyDecision.RequiresConfirmation && !dryRun)
                 {
@@ -173,7 +266,7 @@ public sealed class ExecutionController : IExecutionController
                     bool confirmed = false;
                     if (ConfirmationRequested is not null)
                     {
-                        confirmed = await ConfirmationRequested.Invoke(action);
+                        confirmed = await ConfirmationRequested.Invoke(actionToExecute);
                     }
 
                     if (!confirmed)
@@ -191,33 +284,34 @@ public sealed class ExecutionController : IExecutionController
                 }
 
                 // Step 5: Inter-step delay
-                if (action.DelayMs > 0)
+                if (actionToExecute.DelayMs > 0)
                 {
-                    await Task.Delay(action.DelayMs, linkedToken);
+                    await Task.Delay(actionToExecute.DelayMs, linkedToken);
                 }
 
                 // Dry-run mode: skip physical input execution
                 if (dryRun)
                 {
-                    LogMessage?.Invoke($"[Dry Run] Step {_currentStepIndex}: Would execute {action.Type} target={_currentTargetInfo}");
-                    var dryResult = ActionExecutionResult.Success(action.Id, action.Type, $"[Dry Run] Validated step {action.Type}", VerificationStatus.Verified);
+                    LogMessage?.Invoke($"[Dry Run] Step {_currentStepIndex}: Would execute {actionToExecute.Type} target={_currentTargetInfo}");
+                    var dryResult = ActionExecutionResult.Success(actionToExecute.Id, actionToExecute.Type, $"[Dry Run] Validated step {actionToExecute.Type}", VerificationStatus.Verified);
                     runRecord.StepResults.Add(dryResult);
                     runRecord.ExecutedActions++;
-                    StepProgress?.Invoke(_currentStepIndex, action, dryResult);
+                    runRecord.LastSuccessfulActionId = actionToExecute.Id;
+                    StepProgress?.Invoke(_currentStepIndex, actionToExecute, dryResult);
                     continue;
                 }
 
                 // Step 6: Verify target if required
-                if (action.Target is not null && (action.Verification?.VerifyTargetExists ?? true))
+                if (actionToExecute.Target is not null && (actionToExecute.Verification?.VerifyTargetExists ?? true))
                 {
-                    bool targetExists = await _backend.VerifyTargetAsync(action.Target, linkedToken);
+                    bool targetExists = await _backend.VerifyTargetAsync(actionToExecute.Target, linkedToken);
                     if (!targetExists)
                     {
-                        var targetFailMsg = $"Target not found or lost for step {_currentStepIndex} ({action.Type}). Stopping for safety.";
+                        var targetFailMsg = $"Target not found or lost for step {_currentStepIndex} ({actionToExecute.Type}). Stopping for safety.";
                         LogMessage?.Invoke(targetFailMsg);
-                        var targetResult = ActionExecutionResult.Failure(action.Id, action.Type, targetFailMsg, "TARGET_NOT_FOUND", VerificationStatus.Failed);
+                        var targetResult = ActionExecutionResult.Failure(actionToExecute.Id, actionToExecute.Type, targetFailMsg, "TARGET_NOT_FOUND", VerificationStatus.Failed);
                         runRecord.StepResults.Add(targetResult);
-                        runRecord.FailedActionId = action.Id;
+                        runRecord.FailedActionId = actionToExecute.Id;
                         runRecord.SafeErrorMessage = targetFailMsg;
                         runRecord.ErrorCode = "TARGET_NOT_FOUND";
                         runRecord.FinalState = ExecutionState.Failed;
@@ -228,7 +322,7 @@ public sealed class ExecutionController : IExecutionController
                 }
 
                 // Step 7: Execute with per-action bounded timeout
-                int perActionTimeout = Math.Clamp(action.TimeoutMs, 500, workflow.Limits?.MaxActionTimeoutMs ?? 10000);
+                int perActionTimeout = Math.Clamp(actionToExecute.TimeoutMs, 500, workflow.Limits?.MaxActionTimeoutMs ?? 10000);
                 using var actionTimeoutCts = new CancellationTokenSource(perActionTimeout);
                 using var actionLinkedCts = CancellationTokenSource.CreateLinkedTokenSource(linkedToken, actionTimeoutCts.Token);
 
@@ -236,7 +330,7 @@ public sealed class ExecutionController : IExecutionController
                 ActionExecutionResult result;
                 try
                 {
-                    result = await _backend.ExecuteActionAsync(action, actionLinkedCts.Token);
+                    result = await _backend.ExecuteActionAsync(actionToExecute, actionLinkedCts.Token);
                     sw.Stop();
                     result.DurationMs = sw.ElapsedMilliseconds;
                 }
@@ -244,36 +338,35 @@ public sealed class ExecutionController : IExecutionController
                 {
                     sw.Stop();
                     result = ActionExecutionResult.Failure(
-                        action.Id, action.Type,
+                        actionToExecute.Id, actionToExecute.Type,
                         $"Step {_currentStepIndex} timed out after {perActionTimeout}ms.",
                         "ACTION_TIMEOUT",
-                        action.IsIdempotent ? VerificationStatus.Failed : VerificationStatus.UnknownOutcome);
+                        actionToExecute.IsIdempotent ? VerificationStatus.Failed : VerificationStatus.UnknownOutcome);
                 }
 
                 runRecord.StepResults.Add(result);
-                StepProgress?.Invoke(_currentStepIndex, action, result);
+                StepProgress?.Invoke(_currentStepIndex, actionToExecute, result);
 
                 if (!result.IsSuccess)
                 {
                     LogMessage?.Invoke($"Step {_currentStepIndex} failed: {result.SafeMessage} (Outcome: {result.Status})");
-                    runRecord.FailedActionId = action.Id;
+                    runRecord.FailedActionId = actionToExecute.Id;
                     runRecord.SafeErrorMessage = result.SafeMessage;
                     runRecord.ErrorCode = result.ErrorCode ?? "EXECUTION_ERROR";
                     runRecord.FinalState = ExecutionState.Failed;
-                    runRecord.LastCheckpointId = lastCheckpointId;
                     CurrentState = ExecutionState.Failed;
                     await _backend.ReleaseInputStateAsync();
                     return runRecord;
                 }
 
-                if (string.Equals(action.Type, ActionTypes.Checkpoint, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(actionToExecute.Type, ActionTypes.Checkpoint, StringComparison.OrdinalIgnoreCase))
                 {
-                    lastCheckpointId = action.Id;
-                    runRecord.LastCheckpointId = lastCheckpointId;
-                    LogMessage?.Invoke($"Verified checkpoint reached: Step {_currentStepIndex} ({action.Description ?? action.Id})");
+                    lastCheckpointId = actionToExecute.Id;
+                    LogMessage?.Invoke($"Verified checkpoint reached: Step {_currentStepIndex} ({actionToExecute.Description ?? actionToExecute.Id})");
                 }
 
                 runRecord.ExecutedActions++;
+                runRecord.LastSuccessfulActionId = actionToExecute.Id;
             }
 
             runRecord.FinalState = ExecutionState.Completed;
@@ -297,8 +390,16 @@ public sealed class ExecutionController : IExecutionController
         }
         finally
         {
-            await _backend.ReleaseInputStateAsync();
+            runRecord.LastCheckpointId = lastCheckpointId;
             runRecord.EndedUtc = DateTime.UtcNow;
+            await _backend.ReleaseInputStateAsync();
+
+            lock (_stateLock)
+            {
+                CurrentState = runRecord.FinalState;
+            }
+
+            _ = Task.Run(() => ExecutionCompleted?.Invoke(runRecord));
         }
 
         return runRecord;
@@ -335,7 +436,14 @@ public sealed class ExecutionController : IExecutionController
 
     public async Task StopAsync()
     {
-        CurrentState = ExecutionState.Stopping;
+        lock (_stateLock)
+        {
+            if (_state is ExecutionState.Idle or ExecutionState.Completed or ExecutionState.Failed or ExecutionState.Cancelled)
+            {
+                return;
+            }
+            CurrentState = ExecutionState.Stopping;
+        }
         LogMessage?.Invoke("Stopping playback...");
         _pauseTcs?.TrySetCanceled();
         _workflowCts?.Cancel();
@@ -344,7 +452,14 @@ public sealed class ExecutionController : IExecutionController
 
     public async Task EmergencyStopAsync()
     {
-        CurrentState = ExecutionState.Stopping;
+        lock (_stateLock)
+        {
+            if (_state is ExecutionState.Idle or ExecutionState.Completed or ExecutionState.Failed or ExecutionState.Cancelled)
+            {
+                return;
+            }
+            CurrentState = ExecutionState.Stopping;
+        }
         LogMessage?.Invoke("EMERGENCY STOP ACTIVATED: Immediate halt requested.");
         _pauseTcs?.TrySetCanceled();
         _workflowCts?.Cancel();

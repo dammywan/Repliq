@@ -119,6 +119,116 @@ public class ExecutionControllerTests
         Assert.Equal(ExecutionState.Completed, run.FinalState);
     }
 
+    [Fact]
+    public async Task StopAsync_WhenIdle_DoesNotGetStuckInStoppingAndAllowsNextStart()
+    {
+        var controller = new ExecutionController(_backend, _policyEngine);
+        var wf = CreateTestWorkflow();
+
+        // Calling stop when idle should not stick in Stopping
+        await controller.StopAsync();
+        Assert.NotEqual(ExecutionState.Stopping, controller.CurrentState);
+
+        // Next start should succeed smoothly without throwing
+        var run = await controller.StartAsync(wf);
+        Assert.Equal(ExecutionState.Completed, run.FinalState);
+    }
+
+    [Fact]
+    public async Task RapidStopDuringActiveRun_AllowsImmediateRestartWithoutStoppingDeadlock()
+    {
+        _backend.ActionDelayMs = 150;
+        var controller = new ExecutionController(_backend, _policyEngine);
+        var wf = CreateTestWorkflow();
+        for (int i = 0; i < 8; i++)
+        {
+            wf.Actions.Add(new WorkflowAction { Type = ActionTypes.Wait, DelayMs = 100 });
+        }
+
+        // Start long running workflow
+        var firstRunTask = controller.StartAsync(wf);
+        await Task.Delay(40);
+
+        // Trigger Stop while running
+        var stopTask = controller.StopAsync();
+
+        // Immediately attempt to start a new workflow (simulating user immediately clicking Run)
+        var secondRunTask = controller.StartAsync(CreateTestWorkflow());
+
+        await stopTask;
+        var firstRun = await firstRunTask;
+        var secondRun = await secondRunTask;
+
+        Assert.Equal(ExecutionState.Cancelled, firstRun.FinalState);
+        Assert.Equal(ExecutionState.Completed, secondRun.FinalState);
+        Assert.Equal(ExecutionState.Completed, controller.CurrentState);
+    }
+
+    [Fact]
+    public async Task MultiProcessWorkflow_ExecutesStepsAcrossMultipleTargetProcessesWithoutDenial()
+    {
+        var controller = new ExecutionController(_backend, _policyEngine);
+        var multiWf = new WorkflowDefinition
+        {
+            SchemaVersion = 1,
+            Id = "wf-multi-proc",
+            Name = "Multi Process Workflow",
+            TargetPolicy = new TargetPolicy
+            {
+                AllowedProcesses = new() { "WindowsTerminal.exe", "Antigravity.exe", "brave.exe", "Taskmgr.exe" }
+            },
+            Actions = new List<WorkflowAction>
+            {
+                new()
+                {
+                    Id = "step1",
+                    Type = ActionTypes.Click,
+                    Target = new TargetSelector { ProcessName = "WindowsTerminal.exe" }
+                },
+                new()
+                {
+                    Id = "step2",
+                    Type = ActionTypes.TypeText,
+                    Target = new TargetSelector { ProcessName = "Antigravity.exe" },
+                    Parameters = new() { ["text"] = "echo test" }
+                },
+                new()
+                {
+                    Id = "step3",
+                    Type = ActionTypes.Click,
+                    Target = new TargetSelector { ProcessName = "brave.exe" }
+                },
+                new()
+                {
+                    Id = "step4",
+                    Type = ActionTypes.Click,
+                    Target = new TargetSelector { ProcessName = "Taskmgr.exe" }
+                }
+            }
+        };
+
+        var run = await controller.StartAsync(multiWf);
+
+        Assert.Equal(ExecutionState.Completed, run.FinalState);
+        Assert.Equal(4, run.ExecutedActions);
+        Assert.Equal(4, _backend.ExecutedActions.Count);
+    }
+
+    [Fact]
+    public async Task EmergencyStopAsync_WhenIdle_DoesNotGetStuckInStoppingAndAllowsNextStart()
+    {
+        var controller = new ExecutionController(_backend, _policyEngine);
+        var wf = CreateTestWorkflow();
+
+        // Calling emergency stop when idle
+        await controller.EmergencyStopAsync();
+        Assert.NotEqual(ExecutionState.Stopping, controller.CurrentState);
+
+        // Next start should succeed smoothly without throwing
+        var run = await controller.StartAsync(wf);
+        Assert.Equal(ExecutionState.Completed, run.FinalState);
+    }
+
     private static WorkflowDefinition CreateTestWorkflow()
     {
         return new WorkflowDefinition

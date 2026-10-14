@@ -71,5 +71,7 @@ public sealed class WorkflowDefinition
 
     public List<WorkflowAction> Actions { get; set; } = new();
 
+    public Dictionary<string, string> Variables { get; set; } = new();
+
     public Dictionary<string, string> Metadata { get; set; } = new();
 }

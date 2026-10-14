@@ -25,8 +25,9 @@ public sealed class SecurityView : UserControl
     private void InitializeComponents()
     {
         Dock = DockStyle.Fill;
-        Padding = new Padding(24);
+        Padding = new Padding(24, 18, 24, 18);
         AutoScroll = true;
+        AutoScaleMode = AutoScaleMode.Dpi;
 
         var layout = new TableLayoutPanel
         {

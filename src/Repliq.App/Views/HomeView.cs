@@ -1,6 +1,5 @@
+using System.Drawing;
 using Repliq.Core.Models;
-using Repliq.Core.Playback;
-using Repliq.Core.Recording;
 using Repliq.Storage.History;
 using Repliq.Storage.Workflows;
 
@@ -11,19 +10,23 @@ public sealed class HomeView : UserControl
     private readonly IWorkflowRepository _workflowRepo;
     private readonly IHistoryRepository _historyRepo;
     private readonly Action<string> _navigateAction;
+    private readonly Action<string, WorkflowDefinition>? _runWorkflowAction;
 
-    private readonly ListView _listRecentWorkflows = new();
-    private readonly ListView _listRecentRuns = new();
-    private readonly Label _lblSecurityStatus = new();
+    private readonly Label _lblGreeting = new();
+    private readonly Label _lblSavedCount = new();
+    private readonly Label _lblSuccessRunsCount = new();
+    private readonly Panel _pnlWorkflowsList = new();
 
     public HomeView(
         IWorkflowRepository workflowRepo,
         IHistoryRepository historyRepo,
-        Action<string> navigateAction)
+        Action<string> navigateAction,
+        Action<string, WorkflowDefinition>? runWorkflowAction = null)
     {
         _workflowRepo = workflowRepo;
         _historyRepo = historyRepo;
         _navigateAction = navigateAction;
+        _runWorkflowAction = runWorkflowAction;
 
         InitializeComponents();
     }
@@ -32,194 +35,437 @@ public sealed class HomeView : UserControl
     {
         Dock = DockStyle.Fill;
         AutoScroll = true;
+        AutoScaleMode = AutoScaleMode.Dpi;
 
-        var mainPanel = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 5,
-            Padding = new Padding(24),
-            AutoScroll = true
-        };
-        mainPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Header
-        mainPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Action buttons
-        mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50)); // Recent Workflows
-        mainPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50)); // Recent Activity
-        mainPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Security Status
-
-        // 1. Header
-        var pnlHeader = new Panel { AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 0, 0, 16) };
-        var lblTitle = new Label
-        {
-            Text = "Home",
-            Font = UITheme.FontHeader,
-            AutoSize = true,
-            Location = new Point(0, 0)
-        };
-        var lblSubtitle = new Label
-        {
-            Text = "Secure, local-first Windows desktop workflow automation",
-            Font = UITheme.FontBody,
-            Tag = "secondary",
-            AutoSize = true,
-            Location = new Point(0, 32)
-        };
-        pnlHeader.Controls.AddRange(new Control[] { lblTitle, lblSubtitle });
-        mainPanel.Controls.Add(pnlHeader, 0, 0);
-
-        // 2. Action buttons
-        var pnlActions = new FlowLayoutPanel
+        var mainLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
-            Margin = new Padding(0, 0, 0, 20)
+            ColumnCount = 1,
+            RowCount = 6,
+            Padding = new Padding(28, 20, 28, 20)
         };
-        var btnRecord = new Button
-        {
-            Text = "● Record a Task",
-            Tag = "primary",
-            Size = new Size(160, 40),
-            Margin = new Padding(0, 0, 12, 0)
-        };
-        btnRecord.Click += (_, _) => _navigateAction("Recorder");
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // 0: Greeting header
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // 1: Protection active banner
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // 2: Stat cards (Saved & Successful)
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // 3: "Your workflows" header
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // 4: Workflow cards container
+        mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // 5: "+ Create workflow" button
 
-        var btnNewWorkflow = new Button
+        // 0. Greeting Header
+        var pnlHeader = new FlowLayoutPanel
         {
-            Text = "+ Create Workflow",
-            Size = new Size(160, 40),
-            Margin = new Padding(0, 0, 12, 0)
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 18)
         };
-        btnNewWorkflow.Click += (_, _) => _navigateAction("Editor");
+
+        int hour = DateTime.Now.Hour;
+        string greeting = hour < 12 ? "Good morning" : (hour < 18 ? "Good afternoon" : "Good evening");
+        _lblGreeting.Text = greeting;
+        _lblGreeting.Font = UITheme.FontDisplay;
+        _lblGreeting.ForeColor = UITheme.Current.PrimaryText;
+        _lblGreeting.AutoSize = true;
+
+        var lblSubtitle = new Label
+        {
+            Text = "Automate repetitive work. Keep control.",
+            Font = UITheme.FontBody,
+            ForeColor = UITheme.Current.SecondaryText,
+            AutoSize = true,
+            Margin = new Padding(0, 4, 0, 0)
+        };
+        pnlHeader.Controls.AddRange(new Control[] { _lblGreeting, lblSubtitle });
+        mainLayout.Controls.Add(pnlHeader, 0, 0);
+
+        // 1. Protection Active Banner (Green Tinted Card)
+        var pnlBanner = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 1,
+            AutoSize = true,
+            BackColor = UITheme.Current.SuccessSurface,
+            Padding = new Padding(14, 12, 14, 12),
+            Margin = new Padding(0, 0, 0, 18)
+        };
+        pnlBanner.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        pnlBanner.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        pnlBanner.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        var lblBannerIcon = new Label
+        {
+            Text = "✓",
+            Font = new Font("Segoe UI", 12F, FontStyle.Bold),
+            ForeColor = UITheme.Current.SuccessText,
+            Size = new Size(26, 26),
+            TextAlign = ContentAlignment.MiddleCenter,
+            Margin = new Padding(0, 2, 8, 0)
+        };
+        pnlBanner.Controls.Add(lblBannerIcon, 0, 0);
+
+        var pnlBannerText = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            AutoSize = true,
+            Margin = new Padding(0)
+        };
+        var lblBannerTitle = new Label
+        {
+            Text = "Protection active",
+            Font = UITheme.FontBodyBold,
+            ForeColor = UITheme.Current.PrimaryText,
+            AutoSize = true
+        };
+        var lblBannerSub = new Label
+        {
+            Text = "Local workflows · Policy checks enabled",
+            Font = UITheme.FontSmall,
+            ForeColor = UITheme.Current.SuccessText,
+            AutoSize = true,
+            Margin = new Padding(0, 2, 0, 0)
+        };
+        pnlBannerText.Controls.AddRange(new Control[] { lblBannerTitle, lblBannerSub });
+        pnlBanner.Controls.Add(pnlBannerText, 1, 0);
+
+        var lblRightCheck = new Label
+        {
+            Text = "✓",
+            Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+            ForeColor = UITheme.Current.SuccessText,
+            Size = new Size(24, 24),
+            TextAlign = ContentAlignment.MiddleCenter
+        };
+        pnlBanner.Controls.Add(lblRightCheck, 2, 0);
+        mainLayout.Controls.Add(pnlBanner, 0, 1);
+
+        // 2. Metric Stat Cards (Saved & Successful)
+        var pnlStats = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            Height = 110,
+            Margin = new Padding(0, 0, 0, 22)
+        };
+        pnlStats.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        pnlStats.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+
+        // Left Stat Card: Saved workflows
+        var pnlStatLeft = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = UITheme.Current.CardSurface,
+            Margin = new Padding(0, 0, 8, 0),
+            Cursor = Cursors.Hand
+        };
+        pnlStatLeft.Click += (_, _) => _navigateAction("Workflows");
+
+        var flowLeft = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Padding = new Padding(16, 14, 16, 14)
+        };
+        flowLeft.Click += (_, _) => _navigateAction("Workflows");
+
+        var lblLeftIcon = new Label
+        {
+            Text = "🔗",
+            Font = new Font("Segoe UI", 12F, FontStyle.Regular),
+            ForeColor = UITheme.Current.Accent,
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 4)
+        };
+        _lblSavedCount.Text = "00";
+        _lblSavedCount.Font = UITheme.FontStatNumber;
+        _lblSavedCount.ForeColor = UITheme.Current.PrimaryText;
+        _lblSavedCount.AutoSize = true;
+        _lblSavedCount.Margin = new Padding(0, 0, 0, 2);
+
+        var lblSavedDesc = new Label
+        {
+            Text = "Saved workflows",
+            Font = UITheme.FontSmall,
+            ForeColor = UITheme.Current.SecondaryText,
+            AutoSize = true
+        };
+        flowLeft.Controls.AddRange(new Control[] { lblLeftIcon, _lblSavedCount, lblSavedDesc });
+        pnlStatLeft.Controls.Add(flowLeft);
+        pnlStats.Controls.Add(pnlStatLeft, 0, 0);
+
+        // Right Stat Card: Successful runs
+        var pnlStatRight = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = UITheme.Current.CardSurface,
+            Margin = new Padding(8, 0, 0, 0),
+            Cursor = Cursors.Hand
+        };
+        pnlStatRight.Click += (_, _) => _navigateAction("History");
+
+        var flowRight = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            Padding = new Padding(16, 14, 16, 14)
+        };
+        flowRight.Click += (_, _) => _navigateAction("History");
+
+        var lblRightIcon = new Label
+        {
+            Text = "✓",
+            Font = new Font("Segoe UI", 12F, FontStyle.Bold),
+            ForeColor = UITheme.Current.SuccessText,
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 4)
+        };
+        _lblSuccessRunsCount.Text = "00";
+        _lblSuccessRunsCount.Font = UITheme.FontStatNumber;
+        _lblSuccessRunsCount.ForeColor = UITheme.Current.PrimaryText;
+        _lblSuccessRunsCount.AutoSize = true;
+        _lblSuccessRunsCount.Margin = new Padding(0, 0, 0, 2);
+
+        var lblSuccessDesc = new Label
+        {
+            Text = "Successful runs",
+            Font = UITheme.FontSmall,
+            ForeColor = UITheme.Current.SecondaryText,
+            AutoSize = true
+        };
+        flowRight.Controls.AddRange(new Control[] { lblRightIcon, _lblSuccessRunsCount, lblSuccessDesc });
+        pnlStatRight.Controls.Add(flowRight);
+        pnlStats.Controls.Add(pnlStatRight, 1, 0);
+
+        mainLayout.Controls.Add(pnlStats, 0, 2);
+
+        // 3. "Your workflows" Section Header
+        var pnlWfHeader = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        pnlWfHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        pnlWfHeader.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        var lblSectionTitle = new Label
+        {
+            Text = "Your workflows",
+            Font = UITheme.FontHeader,
+            ForeColor = UITheme.Current.PrimaryText,
+            AutoSize = true,
+            Dock = DockStyle.Left,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        pnlWfHeader.Controls.Add(lblSectionTitle, 0, 0);
 
         var btnViewAll = new Button
         {
-            Text = "Workflows Library",
-            Size = new Size(160, 40),
-            Margin = new Padding(0, 0, 12, 0)
-        };
-        btnViewAll.Click += (_, _) => _navigateAction("Workflows");
-
-        pnlActions.Controls.AddRange(new Control[] { btnRecord, btnNewWorkflow, btnViewAll });
-        mainPanel.Controls.Add(pnlActions, 0, 1);
-
-        // 3. Recent Workflows Group
-        var grpWorkflows = new GroupBox
-        {
-            Text = "Saved Workflows",
-            Dock = DockStyle.Fill,
-            Font = UITheme.FontSubheader,
-            Margin = new Padding(0, 0, 0, 16)
-        };
-        _listRecentWorkflows.Dock = DockStyle.Fill;
-        _listRecentWorkflows.View = View.Details;
-        _listRecentWorkflows.FullRowSelect = true;
-        _listRecentWorkflows.Font = UITheme.FontBody;
-        _listRecentWorkflows.Columns.Add("Workflow Name", 250);
-        _listRecentWorkflows.Columns.Add("Target Policy", 180);
-        _listRecentWorkflows.Columns.Add("Steps", 80);
-        _listRecentWorkflows.Columns.Add("Status", 150);
-        _listRecentWorkflows.DoubleClick += (_, _) =>
-        {
-            if (_listRecentWorkflows.SelectedItems.Count > 0)
-                _navigateAction("Workflows");
-        };
-        grpWorkflows.Controls.Add(_listRecentWorkflows);
-        mainPanel.Controls.Add(grpWorkflows, 0, 2);
-
-        // 4. Recent Activity Group
-        var grpRuns = new GroupBox
-        {
-            Text = "Recent Execution Activity",
-            Dock = DockStyle.Fill,
-            Font = UITheme.FontSubheader,
-            Margin = new Padding(0, 0, 0, 16)
-        };
-        _listRecentRuns.Dock = DockStyle.Fill;
-        _listRecentRuns.View = View.Details;
-        _listRecentRuns.FullRowSelect = true;
-        _listRecentRuns.Font = UITheme.FontBody;
-        _listRecentRuns.Columns.Add("Workflow", 220);
-        _listRecentRuns.Columns.Add("Outcome", 130);
-        _listRecentRuns.Columns.Add("Executed", 100);
-        _listRecentRuns.Columns.Add("Started (UTC)", 160);
-        _listRecentRuns.Columns.Add("Safe Error / Note", 250);
-        grpRuns.Controls.Add(_listRecentRuns);
-        mainPanel.Controls.Add(grpRuns, 0, 3);
-
-        // 5. Compact Security Status Banner
-        var pnlSec = new Panel
-        {
-            Dock = DockStyle.Fill,
+            Text = "View all →",
+            Font = UITheme.FontBody,
+            ForeColor = UITheme.Current.Accent,
+            BackColor = Color.Transparent,
+            FlatStyle = FlatStyle.Flat,
             AutoSize = true,
-            Tag = "secondary",
-            Padding = new Padding(12),
-            Margin = new Padding(0, 4, 0, 0)
+            Cursor = Cursors.Hand
         };
-        _lblSecurityStatus.Text = "🛡️ Security Status: Execution Policy Active | Default-Deny Enforced | DPAPI Vault Ready | No elevation";
-        _lblSecurityStatus.Font = UITheme.FontBodyBold;
-        _lblSecurityStatus.Dock = DockStyle.Fill;
-        _lblSecurityStatus.TextAlign = ContentAlignment.MiddleLeft;
-        pnlSec.Controls.Add(_lblSecurityStatus);
-        mainPanel.Controls.Add(pnlSec, 0, 4);
+        btnViewAll.FlatAppearance.BorderSize = 0;
+        btnViewAll.Click += (_, _) => _navigateAction("Workflows");
+        pnlWfHeader.Controls.Add(btnViewAll, 1, 0);
 
-        Controls.Add(mainPanel);
+        mainLayout.Controls.Add(pnlWfHeader, 0, 3);
+
+        // 4. Workflow Cards Container
+        _pnlWorkflowsList.Dock = DockStyle.Fill;
+        _pnlWorkflowsList.AutoSize = true;
+        _pnlWorkflowsList.Margin = new Padding(0, 0, 0, 16);
+        mainLayout.Controls.Add(_pnlWorkflowsList, 0, 4);
+
+        // 5. "+ Create workflow" Prominent Button
+        var btnCreateWf = new Button
+        {
+            Text = "+ Create workflow",
+            Dock = DockStyle.Fill,
+            Height = 44,
+            Font = UITheme.FontBodyBold,
+            BackColor = UITheme.Current.AccentLight,
+            ForeColor = UITheme.Current.AccentLightText,
+            FlatStyle = FlatStyle.Flat,
+            Cursor = Cursors.Hand,
+            Margin = new Padding(0, 0, 0, 12)
+        };
+        btnCreateWf.FlatAppearance.BorderSize = 0;
+        btnCreateWf.Click += (_, _) => _navigateAction("Editor");
+        mainLayout.Controls.Add(btnCreateWf, 0, 5);
+
+        Controls.Add(mainLayout);
+        UITheme.Apply(this);
     }
 
     public async Task RefreshDataAsync()
     {
         try
         {
-            _listRecentWorkflows.Items.Clear();
             var workflows = await _workflowRepo.GetAllAsync();
+            _lblSavedCount.Text = workflows.Count.ToString("D2");
 
-            if (workflows.Count == 0)
-            {
-                var item = new ListViewItem("No workflows saved yet. Click 'Record a Task' to begin.");
-                item.SubItems.AddRange(new[] { "-", "-", "Empty" });
-                _listRecentWorkflows.Items.Add(item);
-            }
-            else
-            {
-                foreach (var wf in workflows.Take(10))
-                {
-                    string target = wf.TargetPolicy?.AllowedProcesses.Count > 0
-                        ? string.Join(", ", wf.TargetPolicy.AllowedProcesses)
-                        : "Any permitted";
-                    string status = wf.Metadata.ContainsKey("RequiresReview")
-                        ? "[!] Needs Review (Imported)"
-                        : "[✓] Ready to Run";
+            var runs = await _historyRepo.GetRecentRunsAsync(100);
+            int successRuns = runs.Count(r => r.FinalState == ExecutionState.Completed);
+            _lblSuccessRunsCount.Text = successRuns.ToString("D2");
 
-                    var item = new ListViewItem(wf.Name);
-                    item.SubItems.Add(target);
-                    item.SubItems.Add(wf.Actions.Count.ToString());
-                    item.SubItems.Add(status);
-                    item.Tag = wf.Id;
-                    _listRecentWorkflows.Items.Add(item);
-                }
-            }
-
-            _listRecentRuns.Items.Clear();
-            var runs = await _historyRepo.GetRecentRunsAsync(10);
-            if (runs.Count == 0)
-            {
-                var item = new ListViewItem("No runs recorded yet.");
-                item.SubItems.AddRange(new[] { "-", "-", "-", "-" });
-                _listRecentRuns.Items.Add(item);
-            }
-            else
-            {
-                foreach (var r in runs)
-                {
-                    var item = new ListViewItem(r.WorkflowName);
-                    item.SubItems.Add($"[{r.FinalState}]");
-                    item.SubItems.Add($"{r.ExecutedActions} / {r.TotalActions}");
-                    item.SubItems.Add(r.StartedUtc.ToString("yyyy-MM-dd HH:mm:ss"));
-                    item.SubItems.Add(r.SafeErrorMessage ?? "Completed smoothly");
-                    item.Tag = r.RunId;
-                    _listRecentRuns.Items.Add(item);
-                }
-            }
+            RenderWorkflowCards(workflows.Take(4).ToList());
         }
         catch { }
+    }
+
+    private void RenderWorkflowCards(List<WorkflowDefinition> workflows)
+    {
+        _pnlWorkflowsList.Controls.Clear();
+        _pnlWorkflowsList.SuspendLayout();
+
+        if (workflows.Count == 0)
+        {
+            var pnlEmpty = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = 60,
+                BackColor = UITheme.Current.CardSurface,
+                Padding = new Padding(16),
+                Margin = new Padding(0, 0, 0, 8)
+            };
+            var lblEmpty = new Label
+            {
+                Text = "No saved workflows yet. Click '+ Create workflow' or Record to get started.",
+                Font = UITheme.FontBody,
+                ForeColor = UITheme.Current.SecondaryText,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+            pnlEmpty.Controls.Add(lblEmpty);
+            _pnlWorkflowsList.Controls.Add(pnlEmpty);
+            _pnlWorkflowsList.ResumeLayout();
+            return;
+        }
+
+        // Add cards in reverse order so Dock = Top stacks them properly
+        for (int i = workflows.Count - 1; i >= 0; i--)
+        {
+            var wf = workflows[i];
+            var card = CreateWorkflowCard(wf);
+            _pnlWorkflowsList.Controls.Add(card);
+        }
+
+        _pnlWorkflowsList.ResumeLayout();
+    }
+
+    private Control CreateWorkflowCard(WorkflowDefinition wf)
+    {
+        var card = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            Height = 62,
+            ColumnCount = 3,
+            RowCount = 1,
+            BackColor = UITheme.Current.CardSurface,
+            Padding = new Padding(12, 10, 12, 10),
+            Margin = new Padding(0, 0, 0, 8),
+            Cursor = Cursors.Hand
+        };
+        card.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        card.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        // Icon Box
+        var pnlIconBox = new Panel
+        {
+            Size = new Size(38, 38),
+            BackColor = UITheme.Current.WindowBackground,
+            Margin = new Padding(0, 2, 12, 0)
+        };
+        var lblIcon = new Label
+        {
+            Text = "📋",
+            Font = new Font("Segoe UI", 11F, FontStyle.Regular),
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter
+        };
+        pnlIconBox.Controls.Add(lblIcon);
+        card.Controls.Add(pnlIconBox, 0, 0);
+
+        // Titles
+        var pnlInfo = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            AutoSize = true,
+            Margin = new Padding(0)
+        };
+        var lblTitle = new Label
+        {
+            Text = wf.Name,
+            Font = UITheme.FontBodyBold,
+            ForeColor = UITheme.Current.PrimaryText,
+            AutoSize = true
+        };
+
+        string subtitle = wf.Description ?? (wf.TargetPolicy?.AllowedProcesses.Count > 0
+            ? string.Join(", ", wf.TargetPolicy.AllowedProcesses)
+            : $"{wf.Actions.Count} actions");
+
+        var lblSub = new Label
+        {
+            Text = subtitle,
+            Font = UITheme.FontSmall,
+            ForeColor = UITheme.Current.SecondaryText,
+            AutoSize = true,
+            Margin = new Padding(0, 2, 0, 0)
+        };
+        pnlInfo.Controls.AddRange(new Control[] { lblTitle, lblSub });
+        card.Controls.Add(pnlInfo, 1, 0);
+
+        // Play Button
+        var btnPlay = new Button
+        {
+            Text = "▶",
+            Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+            Size = new Size(34, 34),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = UITheme.Current.SecondarySurface,
+            ForeColor = UITheme.Current.PrimaryText,
+            Cursor = Cursors.Hand,
+            Margin = new Padding(8, 3, 0, 0)
+        };
+        btnPlay.FlatAppearance.BorderSize = 1;
+        btnPlay.FlatAppearance.BorderColor = UITheme.Current.CardBorder;
+        btnPlay.Click += (_, _) =>
+        {
+            if (_runWorkflowAction is not null)
+            {
+                _runWorkflowAction("Run", wf);
+            }
+            else
+            {
+                _navigateAction("Workflows");
+            }
+        };
+        card.Controls.Add(btnPlay, 2, 0);
+
+        // Card click navigates to details or runs
+        card.Click += (_, _) =>
+        {
+            if (_runWorkflowAction is not null)
+                _runWorkflowAction("Run", wf);
+            else
+                _navigateAction("Workflows");
+        };
+
+        return card;
     }
 }

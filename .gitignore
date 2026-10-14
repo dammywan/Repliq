@@ -1,0 +1,17 @@
+## .NET Core / Visual Studio .gitignore
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+.vs/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+TestResults/
+*.DotSettings.user
+*.nupkg
+.idea/
+.vscode/
+*.swp
+*~

@@ -266,17 +266,14 @@ public sealed class HomeView : UserControl
         };
         pnlWfHeader.Controls.Add(lblSectionTitle, 0, 0);
 
-        var btnViewAll = new Button
+        var btnViewAll = new ThemedButton
         {
             Text = "View all →",
+            Tag = "subtle",
             Font = UITheme.FontBody,
-            ForeColor = UITheme.Current.Accent,
-            BackColor = Color.Transparent,
-            FlatStyle = FlatStyle.Flat,
-            AutoSize = true,
+            Size = new Size(95, 30),
             Cursor = Cursors.Hand
         };
-        btnViewAll.FlatAppearance.BorderSize = 0;
         btnViewAll.Click += (_, _) => _navigateAction("Workflows");
         pnlWfHeader.Controls.Add(btnViewAll, 1, 0);
 
@@ -289,19 +286,16 @@ public sealed class HomeView : UserControl
         mainLayout.Controls.Add(_pnlWorkflowsList, 0, 4);
 
         // 5. "+ Create workflow" Prominent Button
-        var btnCreateWf = new Button
+        var btnCreateWf = new ThemedButton
         {
             Text = "+ Create workflow",
+            Tag = "primary",
             Dock = DockStyle.Fill,
             Height = 44,
             Font = UITheme.FontBodyBold,
-            BackColor = UITheme.Current.AccentLight,
-            ForeColor = UITheme.Current.AccentLightText,
-            FlatStyle = FlatStyle.Flat,
             Cursor = Cursors.Hand,
             Margin = new Padding(0, 0, 0, 12)
         };
-        btnCreateWf.FlatAppearance.BorderSize = 0;
         btnCreateWf.Click += (_, _) => _navigateAction("Editor");
         mainLayout.Controls.Add(btnCreateWf, 0, 5);
 
@@ -431,19 +425,14 @@ public sealed class HomeView : UserControl
         card.Controls.Add(pnlInfo, 1, 0);
 
         // Play Button
-        var btnPlay = new Button
+        var btnPlay = new ThemedButton
         {
             Text = "▶",
             Font = new Font("Segoe UI", 10F, FontStyle.Bold),
             Size = new Size(34, 34),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = UITheme.Current.SecondarySurface,
-            ForeColor = UITheme.Current.PrimaryText,
             Cursor = Cursors.Hand,
             Margin = new Padding(8, 3, 0, 0)
         };
-        btnPlay.FlatAppearance.BorderSize = 1;
-        btnPlay.FlatAppearance.BorderColor = UITheme.Current.CardBorder;
         btnPlay.Click += (_, _) =>
         {
             if (_runWorkflowAction is not null)

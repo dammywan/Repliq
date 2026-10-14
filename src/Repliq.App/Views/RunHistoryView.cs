@@ -169,11 +169,17 @@ public sealed class RunHistoryView : UserControl
         int totalWidth = _listRuns.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 4;
         if (totalWidth < 300) totalWidth = 300;
 
-        _listRuns.Columns[0].Width = (int)(totalWidth * 0.28);
-        _listRuns.Columns[1].Width = (int)(totalWidth * 0.18);
-        _listRuns.Columns[2].Width = (int)(totalWidth * 0.14);
-        _listRuns.Columns[3].Width = (int)(totalWidth * 0.22);
-        _listRuns.Columns[4].Width = (int)(totalWidth * 0.18);
+        int w0 = (int)(totalWidth * 0.28);
+        int w1 = (int)(totalWidth * 0.18);
+        int w2 = (int)(totalWidth * 0.14);
+        int w3 = (int)(totalWidth * 0.22);
+        int w4 = Math.Max(50, totalWidth - w0 - w1 - w2 - w3);
+
+        _listRuns.Columns[0].Width = w0;
+        _listRuns.Columns[1].Width = w1;
+        _listRuns.Columns[2].Width = w2;
+        _listRuns.Columns[3].Width = w3;
+        _listRuns.Columns[4].Width = w4;
     }
 
     public async Task RefreshDataAsync()

@@ -4,6 +4,8 @@ using System.IO;
 using System.Reflection;
 using System.Windows.Forms;
 
+using System.Runtime.InteropServices;
+
 namespace Repliq.App;
 
 public sealed class ThemePalette
@@ -127,7 +129,8 @@ public static class UITheme
                                 ?? asm.GetManifestResourceStream("Repliq.Quick.Resources.logo.png");
                 if (stream != null)
                 {
-                    _appLogo = Image.FromStream(stream);
+                    using var raw = Image.FromStream(stream);
+                    _appLogo = new Bitmap(raw);
                     return _appLogo;
                 }
             }
@@ -147,7 +150,8 @@ public static class UITheme
                 {
                     if (File.Exists(c))
                     {
-                        _appLogo = Image.FromFile(c);
+                        using var raw = Image.FromFile(c);
+                        _appLogo = new Bitmap(raw);
                         return _appLogo;
                     }
                 }
@@ -170,7 +174,10 @@ public static class UITheme
                                 ?? asm.GetManifestResourceStream("Repliq.Quick.Resources.app.ico");
                 if (stream != null)
                 {
-                    _appIcon = new Icon(stream);
+                    using var ms = new MemoryStream();
+                    stream.CopyTo(ms);
+                    ms.Position = 0;
+                    _appIcon = new Icon(ms);
                     return _appIcon;
                 }
             }
@@ -190,7 +197,11 @@ public static class UITheme
                 {
                     if (File.Exists(c))
                     {
-                        _appIcon = new Icon(c);
+                        using var fs = File.OpenRead(c);
+                        using var ms = new MemoryStream();
+                        fs.CopyTo(ms);
+                        ms.Position = 0;
+                        _appIcon = new Icon(ms);
                         return _appIcon;
                     }
                 }
@@ -390,12 +401,21 @@ public static class UITheme
         }
     }
 
+    [DllImport("uxtheme.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+    private static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string? pszSubIdList);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wp, IntPtr lp);
+    private const int LVM_GETHEADER = 0x101F;
+
     public static void StyleListView(ListView lv, ThemePalette p)
     {
         lv.BackColor = p.SecondarySurface;
         lv.ForeColor = p.PrimaryText;
         lv.BorderStyle = BorderStyle.FixedSingle;
         lv.OwnerDraw = true;
+
+        ApplyNativeDarkHeaderTheme(lv);
 
         lv.DrawColumnHeader -= OnListViewDrawColumnHeader;
         lv.DrawItem -= OnListViewDrawItem;
@@ -404,6 +424,33 @@ public static class UITheme
         lv.DrawColumnHeader += OnListViewDrawColumnHeader;
         lv.DrawItem += OnListViewDrawItem;
         lv.DrawSubItem += OnListViewDrawSubItem;
+    }
+
+    private static void ApplyNativeDarkHeaderTheme(ListView lv)
+    {
+        void Apply()
+        {
+            try
+            {
+                if (Current.IsDark)
+                {
+                    SetWindowTheme(lv.Handle, "DarkMode_Explorer", null);
+                    var headerHwnd = SendMessage(lv.Handle, LVM_GETHEADER, IntPtr.Zero, IntPtr.Zero);
+                    if (headerHwnd != IntPtr.Zero)
+                    {
+                        SetWindowTheme(headerHwnd, "DarkMode_Explorer", null);
+                    }
+                }
+                else
+                {
+                    SetWindowTheme(lv.Handle, "Explorer", null);
+                }
+            }
+            catch { }
+        }
+
+        if (lv.IsHandleCreated) Apply();
+        else lv.HandleCreated += (_, _) => Apply();
     }
 
     private static void OnListViewDrawColumnHeader(object? sender, DrawListViewColumnHeaderEventArgs e)
@@ -430,7 +477,7 @@ public static class UITheme
 
     private static void OnListViewDrawItem(object? sender, DrawListViewItemEventArgs e)
     {
-        // Drawing handled per-subitem in DrawSubItem
+        e.DrawDefault = false;
     }
 
     private static void OnListViewDrawSubItem(object? sender, DrawListViewSubItemEventArgs e)

@@ -11,7 +11,7 @@ public sealed class SecurityView : UserControl
     private readonly Label _lblVaultStatus = new();
     private readonly TextBox _txtPolicyDetails = new();
     private readonly TextBox _txtBoundaryDisclaimer = new();
-    private readonly Button _btnTestVault = new();
+    private readonly ThemedButton _btnTestVault = new();
 
     public SecurityView(IPolicyEngine policyEngine, ISecretStore secretStore)
     {
@@ -55,6 +55,7 @@ public sealed class SecurityView : UserControl
         _lblVaultStatus.Margin = new Padding(0, 6, 16, 0);
 
         _btnTestVault.Text = "Verify Vault Encryption";
+        _btnTestVault.Tag = "primary";
         _btnTestVault.Size = new Size(180, 32);
         _btnTestVault.Click += async (_, _) => await VerifyVaultAsync();
 

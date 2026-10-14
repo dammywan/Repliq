@@ -844,25 +844,21 @@ public sealed class QuickPanelForm : Form
             Size = new Size(310, 26),
             Font = UITheme.FontBody
         };
-        var btnSave = new Button
+        var btnSave = new ThemedButton
         {
             Text = "Save",
+            Tag = "primary",
             DialogResult = DialogResult.OK,
             Location = new Point(166, 80),
-            Size = new Size(80, 30),
-            BackColor = UITheme.Current.Accent,
-            ForeColor = Color.White,
-            FlatStyle = FlatStyle.Flat
+            Size = new Size(80, 30)
         };
-        var btnCancel = new Button
+        var btnCancel = new ThemedButton
         {
             Text = "Cancel",
+            Tag = "subtle",
             DialogResult = DialogResult.Cancel,
             Location = new Point(252, 80),
-            Size = new Size(74, 30),
-            BackColor = UITheme.Current.SecondarySurface,
-            ForeColor = UITheme.Current.PrimaryText,
-            FlatStyle = FlatStyle.Flat
+            Size = new Size(74, 30)
         };
 
         promptForm.Controls.AddRange(new Control[] { lbl, txt, btnSave, btnCancel });

@@ -412,7 +412,7 @@ public sealed class MainForm : Form
 
         _trayIcon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = UITheme.AppIcon ?? SystemIcons.Application,
             Text = "Repliq - Desktop Automation",
             ContextMenuStrip = menu,
             Visible = true

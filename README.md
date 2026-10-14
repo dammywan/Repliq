@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011%20(x64)-0078D6.svg?style=flat-square&logo=windows" alt="Platform" />
   <img src="https://img.shields.io/badge/Developer-RetsardCo-0ea5e9.svg?style=flat-square" alt="Developer RetsardCo" />
   <img src="https://img.shields.io/badge/License-MIT-success.svg?style=flat-square" alt="MIT License" />
-  <img src="https://img.shields.io/badge/Tests-172%20passed-brightgreen.svg?style=flat-square" alt="172 Tests Passing" />
+  <img src="https://img.shields.io/badge/Tests-178%20passed-brightgreen.svg?style=flat-square" alt="178 Tests Passing" />
 </p>
 
 ---
@@ -101,7 +101,7 @@ dotnet build Repliq.sln -c Release
 
 ### Run Tests
 ```powershell
-# Execute the full 172-test automated verification suite
+# Execute the full 178-test automated verification suite
 dotnet test Repliq.sln
 ```
 

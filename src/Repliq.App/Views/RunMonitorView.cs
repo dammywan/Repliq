@@ -25,16 +25,16 @@ public sealed class RunMonitorView : UserControl
     private readonly List<StepCardItem> _stepCards = new();
 
     // Bottom Action Controls
-    private readonly Button _btnPause = new();
-    private readonly Button _btnStop = new();
-    private readonly Button _btnEmergencyStop = new();
+    private readonly ThemedButton _btnPause = new();
+    private readonly ThemedButton _btnStop = new();
+    private readonly ThemedButton _btnEmergencyStop = new();
 
     // Logs & Recovery Panel
     private readonly Panel _pnlLogsHost = new();
     private readonly TextBox _txtLogMessages = new();
     private readonly Panel _pnlRecovery = new();
     private readonly Label _lblRecoveryMessage = new();
-    private readonly Button _btnToggleLogs = new();
+    private readonly ThemedButton _btnToggleLogs = new();
 
     private WorkflowDefinition? _activeWorkflow;
     private bool _isLiveExecution = true;
@@ -198,12 +198,8 @@ public sealed class RunMonitorView : UserControl
 
         _btnStop.Dock = DockStyle.Fill;
         _btnStop.Text = "⏹  Stop";
+        _btnStop.Tag = "danger";
         _btnStop.Font = UITheme.FontBodyBold;
-        _btnStop.FlatStyle = FlatStyle.Flat;
-        _btnStop.FlatAppearance.BorderSize = 1;
-        _btnStop.FlatAppearance.BorderColor = UITheme.Current.CardBorder;
-        _btnStop.BackColor = UITheme.Current.CardSurface;
-        _btnStop.ForeColor = UITheme.Current.Error;
         _btnStop.Margin = new Padding(6, 0, 0, 0);
         _btnStop.Enabled = false;
         _btnStop.Click += async (_, _) => await _controller.StopAsync();

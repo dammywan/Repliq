@@ -225,10 +225,15 @@ public sealed class WorkflowsView : UserControl
         int totalWidth = _listWorkflows.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 4;
         if (totalWidth < 300) totalWidth = 300;
 
-        _listWorkflows.Columns[0].Width = (int)(totalWidth * 0.38);
-        _listWorkflows.Columns[1].Width = (int)(totalWidth * 0.30);
-        _listWorkflows.Columns[2].Width = (int)(totalWidth * 0.14);
-        _listWorkflows.Columns[3].Width = (int)(totalWidth * 0.18);
+        int w0 = (int)(totalWidth * 0.38);
+        int w1 = (int)(totalWidth * 0.30);
+        int w2 = (int)(totalWidth * 0.14);
+        int w3 = Math.Max(50, totalWidth - w0 - w1 - w2);
+
+        _listWorkflows.Columns[0].Width = w0;
+        _listWorkflows.Columns[1].Width = w1;
+        _listWorkflows.Columns[2].Width = w2;
+        _listWorkflows.Columns[3].Width = w3;
     }
 
     public async Task RefreshDataAsync()
